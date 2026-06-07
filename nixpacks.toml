@@ -1,6 +1,6 @@
 # Railway / Nixpacks — repo root (do not set a Root Directory in Railway UI)
 [phases.setup]
-nixPkgs = ["nodejs_22", "python312"]
+nixPkgs = ["nodejs_20", "python312"]
 
 [phases.install]
 cmds = [
