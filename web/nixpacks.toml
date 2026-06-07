@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "python312"]
+
+[phases.install]
+cmds = [
+  "npm ci",
+  "python -m venv /app/.venv",
+  "/app/.venv/bin/pip install -r api/requirements.txt",
+]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "/app/.venv/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT:-8787}"
+workDir = "api"

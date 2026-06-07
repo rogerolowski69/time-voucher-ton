@@ -1,0 +1,28 @@
+---
+import '@/styles/globals.css';
+
+const issuerEmail = import.meta.env.PUBLIC_ISSUER_EMAIL ?? 'you@example.com';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Time Voucher — Prepay for an hour of my time</title>
+    <meta
+      name="description"
+      content="Prepay 1 TON for 1 hour of consulting. You receive a TIME voucher in your TON wallet. Redeem it to book a session."
+    />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  </head>
+  <body>
+    <main class="mx-auto max-w-4xl px-5 py-10 pb-16">
+      <slot />
+      <p class="mt-8 text-sm text-muted-foreground">
+        TIME voucher · 1 token = 1 hour · Issued on TON · Questions:
+        <a class="text-primary underline" href={`mailto:${issuerEmail}`}>{issuerEmail}</a>
+      </p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,81 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { TimeVoucherApp } from '@/components/TimeVoucherApp';
+import { FaqSection } from '@/components/FaqSection';
+import { buttonClassName } from '@/components/ui/button';
+---
+
+<Layout>
+  <Badge class="mb-4">Prepaid time, not speculation</Badge>
+  <h1 class="text-4xl font-bold leading-tight md:text-5xl">
+    Buy an hour of my time.<br />Get a voucher in your wallet.
+  </h1>
+  <p class="mt-4 max-w-2xl text-lg text-muted-foreground">
+    Think of <strong class="text-foreground">TIME</strong> as a digital prepaid card. You pay
+    <strong class="text-foreground">1 TON</strong>, receive <strong class="text-foreground">1 TIME</strong> (= 1 hour), and redeem it when you
+    want to book a session. No subscriptions, no hidden tokenomics.
+  </p>
+
+  <div class="mt-6 flex flex-wrap gap-3">
+    <a class={buttonClassName('default')} href="#buy">Buy 1 hour — 1 TON</a>
+    <a class={buttonClassName('secondary')} href="#redeem">How to redeem</a>
+  </div>
+
+  <section class="mt-8 grid gap-4 md:grid-cols-3" aria-label="How it works">
+    <Card>
+      <CardHeader>
+        <p class="text-sm font-bold uppercase tracking-wide text-accent">Step 1</p>
+        <CardTitle class="text-lg">Pay once</CardTitle>
+      </CardHeader>
+      <CardContent class="text-sm text-muted-foreground">
+        Connect Tonkeeper (or any TON wallet) and buy <strong class="text-foreground">1 TIME</strong> for
+        <strong class="text-foreground">1 TON</strong>.
+      </CardContent>
+    </Card>
+    <Card>
+      <CardHeader>
+        <p class="text-sm font-bold uppercase tracking-wide text-accent">Step 2</p>
+        <CardTitle class="text-lg">Hold your voucher</CardTitle>
+      </CardHeader>
+      <CardContent class="text-sm text-muted-foreground">
+        The token stays in your wallet like a gift card. Use it now or later. You can also send it to someone else.
+      </CardContent>
+    </Card>
+    <Card>
+      <CardHeader>
+        <p class="text-sm font-bold uppercase tracking-wide text-accent">Step 3</p>
+        <CardTitle class="text-lg">Book your hour</CardTitle>
+      </CardHeader>
+      <CardContent class="text-sm text-muted-foreground">
+        Redeem by sending <strong class="text-foreground">1 TIME</strong> back to me and booking a slot on my calendar.
+      </CardContent>
+    </Card>
+  </section>
+
+  <section id="buy" class="mt-8">
+    <TimeVoucherApp client:only="preact" />
+  </section>
+
+  <section class="mt-8 grid gap-4 lg:grid-cols-2">
+    <FaqSection client:only="preact" />
+    <Card>
+      <CardHeader>
+        <CardTitle>Trust signals (put these on the page)</CardTitle>
+      </CardHeader>
+      <CardContent class="space-y-3 text-sm text-muted-foreground">
+        <ul class="list-disc space-y-1 pl-5">
+          <li>Your real name, photo, and what the hour includes</li>
+          <li>LinkedIn / GitHub / past work</li>
+          <li>Clear expiry and refund policy</li>
+          <li>Contract address + “verified on TON Verifier” badge</li>
+          <li>Support email for redemption help</li>
+        </ul>
+        <p>
+          People buy the <em>person</em>, not the token standard. Make redemption feel like buying a coaching package, not minting a coin.
+        </p>
+      </CardContent>
+    </Card>
+  </section>
+</Layout>
