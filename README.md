@@ -29,7 +29,7 @@ just buy-time-testnet
 
 ## Web app
 
-Stack: **Astro** (static) + **Preact** (wallet UI) + **Tailwind** / shadcn-style components + **FastAPI** (API + production static host).
+Stack: **Astro** (static) + **Preact** islands + **Tailwind** + **shadcn/ui** + **Headless UI** + **Zustand** + **FastAPI** (API + production static host).
 
 ```bash
 just web-install    # npm + Python venv
