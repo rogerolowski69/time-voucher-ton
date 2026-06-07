@@ -1,0 +1,15 @@
+# Railway / Nixpacks — repo root (do not set a Root Directory in Railway UI)
+[phases.setup]
+nixPkgs = ["nodejs_22", "python312"]
+
+[phases.install]
+cmds = [
+  "cd web && npm ci",
+  "cd web/api && python -m venv .venv && .venv/bin/pip install -r requirements.txt",
+]
+
+[phases.build]
+cmds = ["cd web && npm run build"]
+
+[start]
+cmd = "sh -c 'cd web/api && .venv/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT:-8787}'"

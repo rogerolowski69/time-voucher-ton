@@ -1,3 +1,30 @@
+// =============================================================================
+// JettonWallet.tolk — Per-owner TIME voucher jetton wallet (TEP-74 / TEP-89)
+// =============================================================================
+//
+// Purpose:
+//   Holds a single owner's TIME jetton balance. Handles transfers, burns,
+//   incoming internal_transfers (from mints/transfers), bounce recovery, and TON top-ups.
+//
+// TEP standards:
+//   TEP-74 — transfer, internal_transfer, burn, excesses, transfer_notification.
+//   TEP-89 — get_wallet_data getter for wallet discovery integrations.
+//
+// Dependencies:
+//   @stdlib/gas-payments — reserveToncoinsOnBalance for excesses handling.
+//   errors.tolk          — exit codes for auth, balance, gas, workchain checks.
+//   fees-management.tolk — minimum TON checks for transfer and burn.
+//   jetton-utils.tolk    — recipient wallet address / deploy descriptor.
+//   messages.tolk        — typed message bodies and opcodes.
+//   sharding.tolk        — MY_WORKCHAIN guard on outbound transfers.
+//   storage.tolk         — WalletStorage and JettonWalletDataReply.
+//
+// TIME voucher context:
+//   Wallets receive TIME tokens via InternalTransferStep from the minter (BuyTime,
+//   admin mint) or from peer wallets. Standard TEP-74 transfer/burn semantics apply.
+//
+// =============================================================================
+
 import "@stdlib/gas-payments"
 import "errors"
 import "fees-management"
@@ -14,13 +41,22 @@ contract JettonWallet {
     incomingMessages: AllowedMessageToWallet
 }
 
+// -----------------------------------------------------------------------------
+// Incoming message union (parsed from in.body)
+// -----------------------------------------------------------------------------
+
 type AllowedMessageToWallet =
     | AskToTransfer
     | AskToBurn
     | InternalTransferStep
     | TopUpTons
 
+// Bounced bodies that restore jetton balance on failed outbound ops
 type BounceOpToHandle = InternalTransferStep | BurnNotificationForMinter
+
+// -----------------------------------------------------------------------------
+// Bounce handler — restore balance when outbound transfer/burn fails
+// -----------------------------------------------------------------------------
 
 fun onBouncedMessage(in: InMessageBounced) {
     in.bouncedBody.skipBouncedPrefix();
@@ -36,10 +72,17 @@ fun onBouncedMessage(in: InMessageBounced) {
     storage.save();
 }
 
+// -----------------------------------------------------------------------------
+// Internal message router
+// -----------------------------------------------------------------------------
+
 fun onInternalMessage(in: InMessage) {
     val msg = lazy AllowedMessageToWallet.fromSlice(in.body);
 
     match (msg) {
+        // ---------------------------------------------------------------------
+        // Handler: internal_transfer (0x178d4519) — receive jettons from minter or peer wallet
+        // ---------------------------------------------------------------------
         InternalTransferStep => {
             var storage = lazy WalletStorage.load();
             if (in.senderAddress != storage.minterAddress) {
@@ -91,6 +134,9 @@ fun onInternalMessage(in: InMessage) {
             }
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: transfer (0x0f8a7ea5) — owner sends jettons to another wallet
+        // ---------------------------------------------------------------------
         AskToTransfer => {
             msg.forwardPayload.checkIsCorrectTlbEither();
             assert (
@@ -130,6 +176,9 @@ fun onInternalMessage(in: InMessage) {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: burn (0x595f07bc) — owner destroys jettons; notifies minter
+        // ---------------------------------------------------------------------
         AskToBurn => {
             checkAmountIsEnoughToBurn(in.valueCoins);
 
@@ -155,6 +204,9 @@ fun onInternalMessage(in: InMessage) {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: top-up (0xd372158c) — accept plain TON without state change
+        // ---------------------------------------------------------------------
         TopUpTons => {
             // just accept tons
         }
@@ -162,6 +214,10 @@ fun onInternalMessage(in: InMessage) {
         else => throw 0xFFFF,
     }
 }
+
+// -----------------------------------------------------------------------------
+// Getters (TEP-74 / TEP-89)
+// -----------------------------------------------------------------------------
 
 get fun get_wallet_data(): JettonWalletDataReply {
     val storage = lazy WalletStorage.load();

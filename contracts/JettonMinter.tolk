@@ -1,3 +1,30 @@
+// =============================================================================
+// JettonMinter.tolk — TIME voucher jetton master / pay-to-mint minter
+// =============================================================================
+//
+// Purpose:
+//   Master contract for TIME jettons: tracks total supply, metadata, admin;
+//   mints on admin request or user BuyTime payment; handles burns and TEP-89 discovery.
+//
+// TEP standards:
+//   TEP-74 — mint, burn_notification, admin ops, upgrade, get_jetton_data.
+//   TEP-89 — RequestWalletAddress, get_wallet_address, on-chain metadata.
+//
+// Dependencies:
+//   @gen/JettonWallet.code — compiled wallet code for deploy and address calc.
+//   errors.tolk            — auth, payment, workchain, wallet validation.
+//   fees-management.tolk   — transfer overhead for mint and BuyTime paths.
+//   jetton-utils.tolk      — wallet deploy descriptor and address derivation.
+//   messages.tolk          — typed message bodies and opcodes.
+//   sharding.tolk          — MY_WORKCHAIN guards on mint and BuyTime.
+//   storage.tolk           — MinterStorage, JettonDataReply, metadata types.
+//
+// TIME voucher context:
+//   Users send BuyTime (0x8f4e2b17) with mintPrice + fees to receive tokensPerMint
+//   TIME jettons. Admin sets mintPrice, withdraws revenue, and can free-mint via MintNewJettons.
+//
+// =============================================================================
+
 import "@gen/JettonWallet.code"
 import "errors"
 import "fees-management"
@@ -14,6 +41,10 @@ contract JettonMinter {
     incomingMessages: AllowedMessageToMinter
 }
 
+// -----------------------------------------------------------------------------
+// Incoming message union (parsed from in.body)
+// -----------------------------------------------------------------------------
+
 type AllowedMessageToMinter =
     | MintNewJettons
     | BuyTime
@@ -28,6 +59,10 @@ type AllowedMessageToMinter =
     | UpgradeMinterCode
     | TopUpTons
 
+// -----------------------------------------------------------------------------
+// Bounce handler — roll back totalSupply when mint deploy bounces
+// -----------------------------------------------------------------------------
+
 fun onBouncedMessage(in: InMessageBounced) {
     in.bouncedBody.skipBouncedPrefix();
     val msg = lazy InternalTransferStep.fromSlice(in.bouncedBody);
@@ -37,9 +72,17 @@ fun onBouncedMessage(in: InMessageBounced) {
     storage.save();
 }
 
+// -----------------------------------------------------------------------------
+// Admin authorization helper
+// -----------------------------------------------------------------------------
+
 fun assertSenderIsAdmin(senderAddress: address, adminAddress: address?) {
     assert (senderAddress == adminAddress!) throw Errors.NotOwner;
 }
+
+// -----------------------------------------------------------------------------
+// Mint pipeline — deploy wallet and deliver InternalTransferStep
+// -----------------------------------------------------------------------------
 
 fun mintJettonsTo(
     mintRecipient: address,
@@ -79,10 +122,17 @@ fun mintJettonsTo(
     deployMsg.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
+// -----------------------------------------------------------------------------
+// Internal message router
+// -----------------------------------------------------------------------------
+
 fun onInternalMessage(in: InMessage) {
     val msg = lazy AllowedMessageToMinter.fromSlice(in.body);
 
     match (msg) {
+        // ---------------------------------------------------------------------
+        // Handler: burn_notification (0x7bdd97de) — wallet reports destroyed supply
+        // ---------------------------------------------------------------------
         BurnNotificationForMinter => {
             var storage = lazy MinterStorage.load();
             val jettonWalletCode = jettonWalletCompiledCode();
@@ -110,6 +160,9 @@ fun onInternalMessage(in: InMessage) {
             excessesMsg.send(SEND_MODE_IGNORE_ERRORS | SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE);
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: provide_wallet_address (0x2c76b973) — TEP-89 wallet discovery
+        // ---------------------------------------------------------------------
         RequestWalletAddress => {
             val ownerAddress: Cell<address>? = msg.includeOwnerAddress
                 ? msg.ownerAddress.toCell()
@@ -140,6 +193,9 @@ fun onInternalMessage(in: InMessage) {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: mint (0x642b7d07) — admin free-mint to arbitrary recipient
+        // ---------------------------------------------------------------------
         MintNewJettons => {
             val storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -151,6 +207,9 @@ fun onInternalMessage(in: InMessage) {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: buy_time (0x8f4e2b17) — pay mintPrice; receive tokensPerMint TIME
+        // ---------------------------------------------------------------------
         BuyTime => {
             val storage = lazy MinterStorage.load();
             assert (in.senderAddress.getWorkchain() == MY_WORKCHAIN) throw Errors.WrongWorkchain;
@@ -177,6 +236,9 @@ fun onInternalMessage(in: InMessage) {
             );
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: set_mint_price (0x91c2a4e8) — configure BuyTime payment amount
+        // ---------------------------------------------------------------------
         SetMintPrice => {
             var storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -185,6 +247,9 @@ fun onInternalMessage(in: InMessage) {
             storage.save();
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: withdraw_ton (0xa1d4e7f2) — send accumulated mint revenue out
+        // ---------------------------------------------------------------------
         WithdrawTon => {
             val storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -207,6 +272,9 @@ fun onInternalMessage(in: InMessage) {
             }
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: change_admin (0x6501f354) — nominate next admin
+        // ---------------------------------------------------------------------
         ChangeMinterAdmin => {
             var storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -214,6 +282,9 @@ fun onInternalMessage(in: InMessage) {
             storage.save();
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: claim_admin (0xfb88e119) — accept nominated admin role
+        // ---------------------------------------------------------------------
         ClaimMinterAdmin => {
             var storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.nextAdminAddress);
@@ -222,6 +293,9 @@ fun onInternalMessage(in: InMessage) {
             storage.save();
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: drop_admin (0x7431f221) — renounce admin (non-mintable)
+        // ---------------------------------------------------------------------
         DropMinterAdmin => {
             var storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -230,6 +304,9 @@ fun onInternalMessage(in: InMessage) {
             storage.save();
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: change_metadata (0xcb862902) — update on-chain jetton content
+        // ---------------------------------------------------------------------
         ChangeMinterMetadata => {
             var storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -237,6 +314,9 @@ fun onInternalMessage(in: InMessage) {
             storage.save();
         }
 
+        // ---------------------------------------------------------------------
+        // Admin: upgrade (0x2508d66a) — replace minter code and data
+        // ---------------------------------------------------------------------
         UpgradeMinterCode => {
             val storage = lazy MinterStorage.load();
             assertSenderIsAdmin(in.senderAddress, storage.adminAddress);
@@ -244,6 +324,9 @@ fun onInternalMessage(in: InMessage) {
             contract.setData(msg.newData);
         }
 
+        // ---------------------------------------------------------------------
+        // Handler: top-up (0xd372158c) — accept plain TON without state change
+        // ---------------------------------------------------------------------
         TopUpTons => {
             // just accept tons
         }
@@ -251,6 +334,10 @@ fun onInternalMessage(in: InMessage) {
         else => throw 0xFFFF,
     }
 }
+
+// -----------------------------------------------------------------------------
+// Getters (TEP-74 / TEP-89)
+// -----------------------------------------------------------------------------
 
 get fun get_jetton_data(): JettonDataReply {
     val storage = lazy MinterStorage.load();
@@ -274,6 +361,10 @@ get fun get_next_admin_address(): address? {
     val storage = lazy MinterStorage.load();
     return storage.nextAdminAddress;
 }
+
+// -----------------------------------------------------------------------------
+// Getters — TIME voucher economics
+// -----------------------------------------------------------------------------
 
 get fun get_mint_price(): int {
     val storage = lazy MinterStorage.load();

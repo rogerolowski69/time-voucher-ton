@@ -1,3 +1,4 @@
+# Deploy from repository root — no Root Directory override needed
 [build]
 builder = "NIXPACKS"
 
@@ -5,3 +6,4 @@ builder = "NIXPACKS"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
+numReplicas = 1

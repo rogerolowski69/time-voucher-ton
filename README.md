@@ -40,9 +40,34 @@ just web-start      # FastAPI serves dist/ + API (production)
 
 Copy `web/.env.example` → `web/.env` and set `PUBLIC_MINTER_ADDRESS`, `PUBLIC_REDEEM_ADDRESS`, etc. Server secrets (`TELEGRAM_BOT_TOKEN`, `ADMIN_API_TOKEN`) stay in the same file — never use the `PUBLIC_` prefix for those.
 
-### Deploy (Railway)
+### Deploy on Railway
 
-Root directory: `web/`. Build runs `npm run build`; start runs uvicorn from `web/api/`. Set `PUBLIC_URL`, `DATA_DIR` (volume), and bot token env vars.
+1. Push this repo to GitHub and connect it in Railway.
+2. Leave **Root Directory** empty (deploy from repo root).
+3. Add a **volume** mounted at `/data`.
+4. Generate a **public domain**.
+
+**Build-time variables** (set before first deploy — Astro bakes these in):
+
+| Variable | Example |
+|----------|---------|
+| `PUBLIC_MINTER_ADDRESS` | Deployed JettonMinter address |
+| `PUBLIC_NETWORK` | `testnet` or `mainnet` |
+| `PUBLIC_REDEEM_ADDRESS` | Issuer TON wallet |
+| `PUBLIC_CAL_COM_URL` | `https://cal.com/your-link` |
+| `PUBLIC_ISSUER_EMAIL` | Support email |
+| `PUBLIC_TELEGRAM_BOT_USERNAME` | Bot username (no `@`) |
+
+**Runtime variables**:
+
+| Variable | Value |
+|----------|-------|
+| `TELEGRAM_BOT_TOKEN` | From BotFather |
+| `ADMIN_API_TOKEN` | Random secret for `/api/admin/events` |
+| `DATA_DIR` | `/data` |
+| `LOG_JSON` | `true` |
+
+Health check: `GET /api/health`. TonConnect manifest and static site served by FastAPI.
 
 ## Acton / Toncenter
 

@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from config import resolve_public_url
 from db import StoredEvent, get_database_path, init_db, list_events, log_event
 from telegram import parse_telegram_user, validate_telegram_init_data
 from tx_hash import hash_from_tx_boc
@@ -21,14 +22,14 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "").strip().rstrip("/")
+PUBLIC_URL = resolve_public_url()
 DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
 
 app = FastAPI(title="Time Voucher API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -132,6 +133,7 @@ def health() -> dict[str, Any]:
         "ok": True,
         "telegramAuthConfigured": bool(BOT_TOKEN),
         "adminApiConfigured": bool(ADMIN_API_TOKEN),
+        "publicUrl": PUBLIC_URL or None,
         "eventDatabase": get_database_path(),
         "staticBundleReady": (DIST_DIR / "index.html").exists(),
     }
