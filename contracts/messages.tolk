@@ -20,6 +20,24 @@
 //
 // =============================================================================
 
+import "errors"
+
+// Opcodes echoed in truncated 256-bit bounce bodies (TEP-74 Only256BitsOfBody).
+const INTERNAL_TRANSFER_OPCODE: int = 0x178d4519;
+const BURN_NOTIFICATION_OPCODE: int = 0x7bdd97de;
+
+// Parse opcode + queryId + jettonAmount from a truncated bounce body.
+// Full TL-B deserialization fails when Only256BitsOfBody drops trailing fields.
+fun loadJettonAmountFromTruncatedBounce(bouncedBody: slice): coins {
+    bouncedBody.skipBouncedPrefix();
+    val opcode = bouncedBody.loadUint(32);
+    assert (
+        opcode == INTERNAL_TRANSFER_OPCODE || opcode == BURN_NOTIFICATION_OPCODE
+    ) throw Errors.InvalidOp;
+    bouncedBody.loadUint(64);
+    return bouncedBody.loadCoins();
+}
+
 // -----------------------------------------------------------------------------
 // Forward payload encoding (TEP-74 either: inline bits or ref)
 // -----------------------------------------------------------------------------

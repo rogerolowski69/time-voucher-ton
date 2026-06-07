@@ -65,6 +65,10 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_events_type_created
               ON events (event_type, created_at DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tx_hash_unique
+              ON events (tx_hash)
+              WHERE tx_hash IS NOT NULL;
             """
         )
 
@@ -90,7 +94,43 @@ def _row_to_event(row: sqlite3.Row) -> StoredEvent:
     )
 
 
+def find_event_by_tx_hash(tx_hash: str) -> StoredEvent | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+              id,
+              event_type,
+              created_at,
+              wallet_address,
+              telegram_user_id,
+              telegram_username,
+              telegram_first_name,
+              tx_boc,
+              tx_hash,
+              minter_address,
+              redeem_address,
+              mint_price,
+              jetton_amount,
+              ton_amount,
+              network,
+              note
+            FROM events
+            WHERE tx_hash = ?
+            LIMIT 1
+            """,
+            (tx_hash,),
+        ).fetchone()
+        return _row_to_event(row) if row else None
+
+
 def log_event(**fields: Any) -> StoredEvent:
+    tx_hash = fields.get("txHash")
+    if tx_hash:
+        existing = find_event_by_tx_hash(tx_hash)
+        if existing:
+            return existing
+
     with _connect() as conn:
         cursor = conn.execute(
             """

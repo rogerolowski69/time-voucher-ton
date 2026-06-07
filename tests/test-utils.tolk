@@ -38,6 +38,16 @@ fun makeTinyForwardPayload(): slice {
     return beginCell().storeUint(0, 1).toSlice();
 }
 
+// Simulate Only256BitsOfBody: bounce prefix + opcode/queryId/jettonAmount only.
+fun makeTruncated256BounceBody(opcode: int, queryId: uint64, jettonAmount: coins): cell {
+    return beginCell()
+        .storeUint(0xffffffff, 32)
+        .storeUint(opcode, 32)
+        .storeUint(queryId, 64)
+        .storeCoins(jettonAmount)
+        .endCell();
+}
+
 fun makeRichCustomPayload(): cell {
     return beginCell().storeUint(0x123456789abcdef, 128).endCell();
 }

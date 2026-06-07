@@ -89,9 +89,9 @@ export function TimeVoucherApp() {
     setStatus({ message, kind });
   }
 
-  async function refreshMinterData(): Promise<void> {
+  async function refreshMinterData(): Promise<{ price: bigint; perMint: bigint } | null> {
     if (!isConfigured) {
-      return;
+      return null;
     }
 
     try {
@@ -102,11 +102,13 @@ export function TimeVoucherApp() {
       ]);
       setMintPrice(price);
       setTokensPerMint(perMint);
+      return { price, perMint };
     } catch (error) {
       setPlainStatus(
         error instanceof Error ? error.message : 'Could not load minter price from chain.',
         'error',
       );
+      return null;
     }
   }
 
@@ -165,15 +167,13 @@ export function TimeVoucherApp() {
       return;
     }
 
-    let price = mintPrice;
-    if (price <= 0n) {
-      await refreshMinterData();
-      price = mintPrice;
-      if (price <= 0n) {
-        setPlainStatus('Mint price is not available yet.', 'error');
-        return;
-      }
+    const latest = await refreshMinterData();
+    if (!latest || latest.price <= 0n) {
+      setPlainStatus('Mint price is not available yet.', 'error');
+      return;
     }
+    const price = latest.price;
+    const perMint = latest.perMint;
 
     setBuying(true);
     setPlainStatus('Confirm the purchase in your wallet…', 'info');
@@ -197,7 +197,7 @@ export function TimeVoucherApp() {
           boc: result.boc,
           minterAddress: config.minterAddress,
           mintPrice: price.toString(),
-          jettonAmount: tokensPerMint.toString(),
+          jettonAmount: perMint.toString(),
           tonAmount: buyTimeAmount(price, config.gasBufferTon),
           network: config.network,
         });
@@ -251,7 +251,14 @@ export function TimeVoucherApp() {
       return;
     }
 
-    if (currentTimeBalance < tokensPerMint) {
+    const latest = await refreshMinterData();
+    if (!latest || latest.perMint <= 0n) {
+      setPlainStatus('Redeem amount is not available yet.', 'error');
+      return;
+    }
+    const redeemAmount = latest.perMint;
+
+    if (currentTimeBalance < redeemAmount) {
       setPlainStatus('You need more TIME before redeeming.', 'error');
       return;
     }
@@ -272,24 +279,26 @@ export function TimeVoucherApp() {
           {
             address: jettonWallet.toString(),
             amount: transferGasAmount(),
-            payload: buildJettonTransferPayload(tokensPerMint, issuer, owner),
+            payload: buildJettonTransferPayload(redeemAmount, issuer, owner),
           },
         ],
       });
 
       let loggedTxHash: string | null = null;
+      let loggingFailed = false;
       try {
         const logged = await logRedeemEvent({
           walletAddress: wallet.account.address,
           boc: result.boc,
           minterAddress: config.minterAddress,
           redeemAddress: config.redeemAddress,
-          jettonAmount: tokensPerMint.toString(),
+          jettonAmount: redeemAmount.toString(),
           network: config.network,
           note: bookingNote,
         });
         loggedTxHash = logged.event?.txHash ?? null;
       } catch (logError) {
+        loggingFailed = true;
         setPlainStatus(
           logError instanceof Error
             ? `TIME sent, but logging failed: ${logError.message}`
@@ -301,15 +310,17 @@ export function TimeVoucherApp() {
       await refreshWalletBalance(wallet.account.address);
       setShowBookNow(true);
 
-      const txUrl = tonscanTxUrl(config.network, loggedTxHash);
-      if (txUrl) {
-        setStatus({
-          kind: 'ok',
-          message: 'Redemption complete.',
-          html: `Redemption complete. <a class="underline" href="${txUrl}" target="_blank" rel="noreferrer">View transaction</a> · book your hour below.`,
-        });
-      } else if (!status.message.includes('logging failed')) {
-        setPlainStatus('Redemption complete. Book your hour below.', 'ok');
+      if (!loggingFailed) {
+        const txUrl = tonscanTxUrl(config.network, loggedTxHash);
+        if (txUrl) {
+          setStatus({
+            kind: 'ok',
+            message: 'Redemption complete.',
+            html: `Redemption complete. <a class="underline" href="${txUrl}" target="_blank" rel="noreferrer">View transaction</a> · book your hour below.`,
+          });
+        } else {
+          setPlainStatus('Redemption complete. Book your hour below.', 'ok');
+        }
       }
     } catch (error) {
       setPlainStatus(error instanceof Error ? error.message : 'Redemption was cancelled or failed.', 'error');

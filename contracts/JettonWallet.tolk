@@ -51,21 +51,12 @@ type AllowedMessageToWallet =
     | InternalTransferStep
     | TopUpTons
 
-// Bounced bodies that restore jetton balance on failed outbound ops
-type BounceOpToHandle = InternalTransferStep | BurnNotificationForMinter
-
 // -----------------------------------------------------------------------------
 // Bounce handler — restore balance when outbound transfer/burn fails
 // -----------------------------------------------------------------------------
 
 fun onBouncedMessage(in: InMessageBounced) {
-    in.bouncedBody.skipBouncedPrefix();
-
-    val msg = lazy BounceOpToHandle.fromSlice(in.bouncedBody);
-    val restoreAmount = match (msg) {
-        InternalTransferStep => msg.jettonAmount,
-        BurnNotificationForMinter => msg.jettonAmount,
-    };
+    val restoreAmount = loadJettonAmountFromTruncatedBounce(in.bouncedBody);
 
     var storage = lazy WalletStorage.load();
     storage.jettonBalance += restoreAmount;

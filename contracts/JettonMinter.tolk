@@ -64,11 +64,10 @@ type AllowedMessageToMinter =
 // -----------------------------------------------------------------------------
 
 fun onBouncedMessage(in: InMessageBounced) {
-    in.bouncedBody.skipBouncedPrefix();
-    val msg = lazy InternalTransferStep.fromSlice(in.bouncedBody);
+    val jettonAmount = loadJettonAmountFromTruncatedBounce(in.bouncedBody);
 
     var storage = lazy MinterStorage.load();
-    storage.totalSupply -= msg.jettonAmount;
+    storage.totalSupply -= jettonAmount;
     storage.save();
 }
 

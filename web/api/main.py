@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -8,14 +9,14 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import resolve_public_url
 from db import StoredEvent, get_database_path, init_db, list_events, log_event
 from telegram import parse_telegram_user, validate_telegram_init_data
-from tx_hash import hash_from_tx_boc
+from tx_verify import TxVerificationError, verify_purchase_boc, verify_redeem_boc
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
@@ -25,10 +26,12 @@ ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 PUBLIC_URL = resolve_public_url()
 DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
 
+_cors_origins = [PUBLIC_URL] if PUBLIC_URL else ["*"]
+
 app = FastAPI(title="Time Voucher API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,8 +61,10 @@ def public_origin(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def resolve_telegram_context(init_data: str | None) -> dict[str, Any]:
+def resolve_telegram_context(init_data: str | None, *, required: bool = False) -> dict[str, Any]:
     if not init_data:
+        if required and BOT_TOKEN:
+            raise ValueError("initData is required when Telegram auth is enabled")
         return {
             "telegramUserId": None,
             "telegramUsername": None,
@@ -71,6 +76,8 @@ def resolve_telegram_context(init_data: str | None) -> dict[str, Any]:
 
     user = parse_telegram_user(init_data)
     if not user:
+        if required and BOT_TOKEN:
+            raise ValueError("Telegram user data is missing from initData")
         return {
             "telegramUserId": None,
             "telegramUsername": None,
@@ -94,17 +101,26 @@ def event_payload(event: StoredEvent) -> dict[str, Any]:
     }
 
 
-def handle_event_log(event_type: str, body: EventBody) -> dict[str, Any]:
+def handle_purchase_log(body: EventBody) -> dict[str, Any]:
     if not body.walletAddress:
         raise HTTPException(status_code=400, detail="walletAddress is required")
     if not body.boc:
         raise HTTPException(status_code=400, detail="boc is required")
+    if not body.minterAddress:
+        raise HTTPException(status_code=400, detail="minterAddress is required")
 
     try:
         telegram = resolve_telegram_context(body.initData)
-        tx_hash = hash_from_tx_boc(body.boc)
+        verified = verify_purchase_boc(
+            body.boc,
+            wallet_address=body.walletAddress,
+            minter_address=body.minterAddress,
+            mint_price=body.mintPrice,
+            network=body.network,
+        )
+        tx_hash = verified.tx_hash or verified.body_hash
         event = log_event(
-            eventType=event_type,
+            eventType="purchase",
             walletAddress=body.walletAddress,
             txBoc=body.boc,
             txHash=tx_hash,
@@ -118,6 +134,47 @@ def handle_event_log(event_type: str, body: EventBody) -> dict[str, Any]:
             **telegram,
         )
         return {"ok": True, "event": event_payload(event)}
+    except TxVerificationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def handle_redeem_log(body: EventBody) -> dict[str, Any]:
+    if not body.walletAddress:
+        raise HTTPException(status_code=400, detail="walletAddress is required")
+    if not body.boc:
+        raise HTTPException(status_code=400, detail="boc is required")
+    if not body.redeemAddress:
+        raise HTTPException(status_code=400, detail="redeemAddress is required")
+
+    try:
+        telegram = resolve_telegram_context(body.initData, required=True)
+        verified = verify_redeem_boc(
+            body.boc,
+            wallet_address=body.walletAddress,
+            redeem_address=body.redeemAddress,
+            jetton_amount=body.jettonAmount,
+            network=body.network,
+        )
+        tx_hash = verified.tx_hash or verified.body_hash
+        event = log_event(
+            eventType="redeem",
+            walletAddress=body.walletAddress,
+            txBoc=body.boc,
+            txHash=tx_hash,
+            minterAddress=body.minterAddress,
+            redeemAddress=body.redeemAddress,
+            mintPrice=body.mintPrice,
+            jettonAmount=str(verified.jetton_amount),
+            tonAmount=body.tonAmount,
+            network=body.network,
+            note=body.note or "time voucher redeem",
+            **telegram,
+        )
+        return {"ok": True, "event": event_payload(event)}
+    except TxVerificationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -155,15 +212,12 @@ def telegram_verify(body: TelegramVerifyBody) -> dict[str, bool]:
 
 @app.post("/api/events/purchase")
 def log_purchase(body: EventBody) -> dict[str, Any]:
-    return handle_event_log("purchase", body)
+    return handle_purchase_log(body)
 
 
 @app.post("/api/events/redeem")
 def log_redeem(body: EventBody) -> dict[str, Any]:
-    return handle_event_log(
-        "redeem",
-        EventBody(**{**body.model_dump(), "note": body.note or "time voucher redeem"}),
-    )
+    return handle_redeem_log(body)
 
 
 @app.get("/api/admin/events")
@@ -175,7 +229,7 @@ def admin_events(
         raise HTTPException(status_code=503, detail="ADMIN_API_TOKEN is not configured")
 
     expected = f"Bearer {ADMIN_API_TOKEN}"
-    if authorization != expected:
+    if not authorization or not secrets.compare_digest(authorization, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     return {
