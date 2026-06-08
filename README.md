@@ -2,6 +2,8 @@
 
 Pay TON to mint **TIME** jettons — prepaid vouchers for one hour of consulting. Redeem by transferring TIME back to the issuer and booking on Cal.com.
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/rogerolowski69/time-voucher-ton)
+
 ## Project layout
 
 ```
@@ -42,7 +44,9 @@ Copy `web/.env.example` → `web/.env` and set `PUBLIC_MINTER_ADDRESS`, `PUBLIC_
 
 ### Deploy on Railway
 
-1. Push this repo to GitHub and connect it in Railway.
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/rogerolowski69/time-voucher-ton)
+
+1. Click **Deploy on Railway** above (or connect this repo in the Railway dashboard).
 2. Leave **Root Directory** empty (deploy from repo root).
 3. Add a **volume** mounted at `/data`.
 4. Generate a **public domain**.
