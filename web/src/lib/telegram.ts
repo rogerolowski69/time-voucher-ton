@@ -31,21 +31,25 @@ function mapUser(): TelegramUser | null {
 }
 
 export function initTelegramWebApp(): TelegramAuthState {
-  const isMiniApp = WebApp.platform !== 'unknown' && Boolean(WebApp.initData);
+  try {
+    const isMiniApp = WebApp.platform !== 'unknown' && Boolean(WebApp.initData);
 
-  if (isMiniApp) {
-    WebApp.ready();
-    WebApp.expand();
-    WebApp.setHeaderColor('#0b1020');
-    WebApp.setBackgroundColor('#0b1020');
+    if (isMiniApp) {
+      WebApp.ready();
+      WebApp.expand();
+      WebApp.setHeaderColor('#0b1020');
+      WebApp.setBackgroundColor('#0b1020');
+    }
+
+    return {
+      isMiniApp,
+      verified: false,
+      user: mapUser(),
+      initData: WebApp.initData,
+    };
+  } catch {
+    return { isMiniApp: false, verified: false, user: null, initData: '' };
   }
-
-  return {
-    isMiniApp,
-    verified: false,
-    user: mapUser(),
-    initData: WebApp.initData,
-  };
 }
 
 export async function verifyTelegramAuth(initData: string): Promise<boolean> {

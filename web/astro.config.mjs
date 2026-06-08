@@ -17,6 +17,7 @@ export default defineConfig({
     resolve: {
       alias: {
         '@': path.resolve(rootDir, 'src'),
+        buffer: 'buffer/',
         react: 'preact/compat',
         'react-dom': 'preact/compat',
         'react/jsx-runtime': 'preact/jsx-runtime',

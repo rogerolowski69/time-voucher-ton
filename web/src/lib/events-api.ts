@@ -1,5 +1,7 @@
 import WebApp from '@twa-dev/sdk';
 
+import { debugError, debugLog } from '@/lib/debug';
+
 export interface LoggedEventResponse {
   ok: boolean;
   event?: {
@@ -23,15 +25,18 @@ export interface PurchaseLogInput {
 export interface RedeemLogInput {
   walletAddress: string;
   boc: string;
-  minterAddress: string;
-  redeemAddress: string;
-  jettonAmount: string;
+  minterAddress?: string;
+  redeemAddress?: string;
+  nftItemAddress?: string;
+  jettonAmount?: string;
   network: string;
   note?: string;
 }
 
 async function postEvent(path: string, body: object): Promise<LoggedEventResponse> {
   const initData = WebApp.initData || undefined;
+  debugLog('api.postEvent.start', { path, hasInitData: Boolean(initData) });
+
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -43,9 +48,12 @@ async function postEvent(path: string, body: object): Promise<LoggedEventRespons
     | null;
 
   if (!response.ok || !payload?.ok) {
-    throw new Error(payload?.error ?? payload?.detail ?? `Event logging failed (${response.status})`);
+    const message = payload?.error ?? payload?.detail ?? `Event logging failed (${response.status})`;
+    debugError('api.postEvent.fail', new Error(message), { path, status: response.status });
+    throw new Error(message);
   }
 
+  debugLog('api.postEvent.ok', { path, eventId: payload.event?.id });
   return payload;
 }
 

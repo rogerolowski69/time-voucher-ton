@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly PUBLIC_MINTER_ADDRESS?: string;
+  readonly PUBLIC_NFT_ITEM_ADDRESS?: string;
   readonly PUBLIC_NETWORK?: string;
   readonly PUBLIC_GAS_BUFFER_TON?: string;
   readonly PUBLIC_REDEEM_ADDRESS?: string;

@@ -1,6 +1,8 @@
-import { TonConnectUI } from '@tonconnect/ui';
-import { useEffect, useMemo, useRef } from 'preact/hooks';
+import type { TonConnectUI } from '@tonconnect/ui';
+import { TonConnectUI as TonConnectUIClass } from '@tonconnect/ui';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 
+import { debugError, debugLog } from '@/lib/debug';
 import { loadConfig } from '@/lib/config';
 import { formatTon } from '@/lib/minter';
 import { formatTelegramUser } from '@/lib/telegram';
@@ -21,15 +23,10 @@ function shortAddress(address: string): string {
 }
 
 export function TimeVoucherApp() {
-  const tonConnectRef = useRef<HTMLDivElement>(null);
-  const tonConnectUI = useMemo(
-    () =>
-      new TonConnectUI({
-        manifestUrl: `${window.location.origin}/tonconnect-manifest.json`,
-        buttonRootId: 'ton-connect-button',
-      }),
-    [],
-  );
+  const [tonConnectUI, setTonConnectUI] = useState<TonConnectUI | null>(null);
+  const [bootError, setBootError] = useState<string | null>(null);
+  const [booting, setBooting] = useState(true);
+
   const client = useMemo(() => createTonClient(config.rpcUrl, config.toncenterApiKey), []);
 
   const telegramAuth = useVoucherStore((state) => state.telegramAuth);
@@ -37,6 +34,9 @@ export function TimeVoucherApp() {
   const tokensPerMint = useVoucherStore((state) => state.tokensPerMint);
   const connectedWalletAddress = useVoucherStore((state) => state.connectedWalletAddress);
   const currentTimeBalance = useVoucherStore((state) => state.currentTimeBalance);
+  const nftRedeemed = useVoucherStore((state) => state.nftRedeemed);
+  const canShowBooking = useVoucherStore((state) => state.canShowBooking);
+  const canShowRedeem = useVoucherStore((state) => state.canShowRedeem);
   const status = useVoucherStore((state) => state.status);
   const showBookNow = useVoucherStore((state) => state.showBookNow);
   const buying = useVoucherStore((state) => state.buying);
@@ -56,47 +56,82 @@ export function TimeVoucherApp() {
 
   const bookingNote = useBookingNote();
   const bookNowUrl = useBookNowUrl(config);
-  const walletStatusMessage = useWalletStatusMessage();
 
-  const isConfigured = config.minterAddress.length > 0;
-  const hasRedeemDestination = config.redeemAddress.length > 0;
-  const canRedeem = hasRedeemDestination && currentTimeBalance >= tokensPerMint && tokensPerMint > 0n;
+  const isMinterConfigured = config.minterAddress.length > 0;
+  const isNftMode = config.nftItemAddress.length > 0;
+  const canRedeemJetton =
+    !isNftMode && config.redeemAddress.length > 0 && currentTimeBalance >= tokensPerMint;
+  const showRedeemButton = isNftMode ? canShowRedeem : canRedeemJetton;
+  const showBookingLink = isNftMode ? canShowBooking : showBookNow;
 
   useEffect(() => {
+    debugLog('app.mount', {
+      network: config.network,
+      minterConfigured: isMinterConfigured,
+      nftConfigured: isNftMode,
+    });
+
     void bootstrapTelegramAuth();
     void refreshMinterData();
 
-    const unsubscribe = tonConnectUI.onStatusChange(async (wallet) => {
-      if (!wallet) {
-        useVoucherStore.getState().clearWallet();
-        setPlainStatus('Wallet disconnected.', 'info');
-        return;
-      }
+    try {
+      debugLog('tonconnect.init.start');
+      const ui = new TonConnectUIClass({
+        manifestUrl: `${window.location.origin}/tonconnect-manifest.json`,
+        buttonRootId: 'ton-connect-button',
+      });
+      setTonConnectUI(ui);
+      debugLog('tonconnect.init.ok');
 
-      await refreshWalletBalance(wallet.account.address);
-      const auth = useVoucherStore.getState().telegramAuth;
-      const who = auth.user ? formatTelegramUser(auth.user) : 'Wallet connected';
-      setPlainStatus(`${who} — you can buy TIME or redeem below.`, 'ok');
-    });
+      const unsubscribe = ui.onStatusChange(async (wallet) => {
+        if (!wallet) {
+          useVoucherStore.getState().clearWallet();
+          setPlainStatus('Wallet disconnected.', 'info');
+          return;
+        }
+        debugLog('wallet.connected', { address: wallet.account.address });
+        await refreshWalletBalance(wallet.account.address);
+        const auth = useVoucherStore.getState().telegramAuth;
+        const who = auth.user ? formatTelegramUser(auth.user) : 'Wallet connected';
+        setPlainStatus(`${who} — you can buy or redeem below.`, 'ok');
+      });
 
-    return () => {
-      unsubscribe();
-    };
+      setBooting(false);
+      return () => unsubscribe();
+    } catch (error) {
+      debugError('tonconnect.init.fail', error);
+      setBootError(error instanceof Error ? error.message : 'TonConnect failed to initialize');
+      setBooting(false);
+    }
   }, []);
+
+  if (booting) {
+    return (
+      <Alert variant="info">
+        <p className="font-semibold">Loading wallet UI…</p>
+        <p className="text-sm text-muted-foreground">TonConnect and chain data are initializing.</p>
+      </Alert>
+    );
+  }
+
+  if (bootError) {
+    return (
+      <Alert variant="error">
+        <p className="font-semibold">Wallet UI boot failed</p>
+        <p className="text-sm">{bootError}</p>
+      </Alert>
+    );
+  }
 
   const buyLabel =
     tokensPerMint === 1n
       ? `Buy 1 hour — ${mintPrice > 0n ? `${formatTon(mintPrice)} TON` : '…'}`
       : `Buy ${tokensPerMint.toString()} TIME — ${mintPrice > 0n ? `${formatTon(mintPrice)} TON` : '…'}`;
 
-  const redeemLabel =
-    tokensPerMint === 1n ? 'Redeem 1 hour' : `Redeem ${tokensPerMint.toString()} TIME`;
-
   const statusVariant =
     status.kind === 'ok' ? 'success' : status.kind === 'error' ? 'error' : 'info';
 
   const botUsername = import.meta.env.PUBLIC_TELEGRAM_BOT_USERNAME?.trim();
-  const tabIndex = activeTab === 'buy' ? 0 : 1;
 
   const buyPanel = (
     <div className="space-y-4">
@@ -105,57 +140,55 @@ export function TimeVoucherApp() {
           <Alert variant={telegramAuth.verified ? 'success' : 'info'}>
             <p className="font-semibold">Telegram</p>
             <p>{telegramAuth.user ? formatTelegramUser(telegramAuth.user) : 'Signed in'}</p>
-            <p className="text-muted-foreground">
-              {telegramAuth.verified ? 'Telegram identity verified' : 'Signed in via Telegram Mini App'}
-            </p>
           </Alert>
         )}
         <Alert variant="info">
           <p className="font-semibold">TON wallet</p>
-          <p className="text-muted-foreground">
-            Connect Tonkeeper (or Telegram’s built-in TON wallet in the Mini App).
-          </p>
+          <p className="text-muted-foreground">Connect Tonkeeper or Telegram&apos;s TON wallet.</p>
         </Alert>
       </div>
 
       {!telegramAuth.isMiniApp && (
         <Alert variant="info">
           <p className="text-muted-foreground">
-            Open this page inside your Telegram bot to sign in.{' '}
-            <a
-              className="text-primary underline"
-              href={
-                botUsername
-                  ? `https://t.me/${botUsername}`
-                  : 'https://core.telegram.org/bots/webapps'
-              }
-              target="_blank"
-              rel="noreferrer"
-            >
-              {botUsername ? `Open @${botUsername}` : 'Learn about Telegram Mini Apps'}
-            </a>
+            Open in Telegram Mini App to sign in.{' '}
+            {botUsername ? (
+              <a className="underline" href={`https://t.me/${botUsername}`} target="_blank" rel="noreferrer">
+                Open @{botUsername}
+              </a>
+            ) : null}
           </p>
         </Alert>
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <div id="ton-connect-button" ref={tonConnectRef} className="min-h-11" />
-        <Button disabled={!isConfigured || buying} onClick={() => void handleBuy()}>
+        <div id="ton-connect-button" className="min-h-11" />
+        <Button
+          disabled={buying}
+          onClick={() => {
+            debugLog('buy.button.click');
+            void handleBuy();
+          }}
+        >
           {buying ? 'Confirm in wallet…' : buyLabel}
         </Button>
       </div>
 
-      {!isConfigured && (
+      {!isMinterConfigured && (
         <Alert variant="warning">
-          Set <code className="font-mono">PUBLIC_MINTER_ADDRESS</code> in <code className="font-mono">web/.env</code>{' '}
-          after deploy.
+          Set <code className="font-mono">PUBLIC_MINTER_ADDRESS</code> in Railway and redeploy.
         </Alert>
       )}
 
       {connectedWalletAddress && (
         <Alert variant="default">
-          Connected: <span className="font-mono">{shortAddress(connectedWalletAddress)}</span> · Balance:{' '}
-          <strong>{currentTimeBalance.toString()} TIME</strong>
+          Connected: <span className="font-mono">{shortAddress(connectedWalletAddress)}</span>
+          {!isNftMode && (
+            <>
+              {' '}
+              · Balance: <strong>{currentTimeBalance.toString()} TIME</strong>
+            </>
+          )}
         </Alert>
       )}
     </div>
@@ -163,18 +196,37 @@ export function TimeVoucherApp() {
 
   const redeemPanel = (
     <div className="space-y-4">
-      <Button variant="secondary" disabled={!canRedeem || redeeming} onClick={() => void handleRedeem()}>
-        {redeeming ? 'Confirm in wallet…' : redeemLabel}
-      </Button>
-
-      {showBookNow && (
-        <Alert variant="success" className="space-y-3">
-          <div>
-            <p className="font-semibold text-accent">TIME sent — book your hour</p>
-            <p className="text-muted-foreground">
-              Your voucher reached the issuer. Pick a slot and the booking note is prefilled.
+      {isNftMode && (
+        <Alert variant="info">
+          <p className="font-semibold">NFT redeem flow</p>
+          <p className="text-sm text-muted-foreground">
+            Version B: Redeem button when owner + not redeemed. Version A: Booking link when owner +
+            redeemed.
+          </p>
+          {nftRedeemed !== null && (
+            <p className="font-mono text-xs mt-1">
+              on-chain redeemed={String(nftRedeemed)} · canRedeem={String(showRedeemButton)} ·
+              canBook={String(showBookingLink)}
             </p>
-          </div>
+          )}
+        </Alert>
+      )}
+
+      {showRedeemButton ? (
+        <Button variant="secondary" disabled={redeeming} onClick={() => void handleRedeem()}>
+          {redeeming ? 'Confirm in wallet…' : isNftMode ? 'Redeem NFT' : 'Redeem TIME'}
+        </Button>
+      ) : (
+        <Alert variant="warning">
+          {isNftMode
+            ? 'Redeem hidden — you must own this NFT and it must not be redeemed yet (Version B).'
+            : 'Redeem hidden — connect wallet and hold enough TIME.'}
+        </Alert>
+      )}
+
+      {showBookingLink ? (
+        <Alert variant="success" className="space-y-3">
+          <p className="font-semibold">Booking unlocked (Version A)</p>
           <div className="flex flex-wrap gap-3">
             <a
               className={cn(buttonClassName('default'), 'no-underline')}
@@ -190,26 +242,11 @@ export function TimeVoucherApp() {
           </div>
           <p className="font-mono text-xs text-muted-foreground">{bookingNote}</p>
         </Alert>
-      )}
-
-      <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
-        <li>
-          <strong className="text-foreground">Connect wallet</strong> and confirm you hold at least 1{' '}
-          <code className="font-mono">TIME</code>.
-        </li>
-        <li>
-          <strong className="text-foreground">Redeem</strong> — sends {tokensPerMint.toString()}{' '}
-          <code className="font-mono">TIME</code> to{' '}
-          <span className="font-mono">{config.redeemAddress || 'Set PUBLIC_REDEEM_ADDRESS'}</span>.
-        </li>
-        <li>
-          <strong className="text-foreground">Book</strong> — use the Cal.com button above (note prefilled with your
-          wallet + Telegram).
-        </li>
-        <li>
-          <strong className="text-foreground">Call</strong> — issuer confirms when they see TIME + your booking.
-        </li>
-      </ol>
+      ) : isNftMode ? (
+        <Alert variant="info">
+          Booking link hidden until NFT is redeemed on-chain (Version A).
+        </Alert>
+      ) : null}
     </div>
   );
 
@@ -223,32 +260,21 @@ export function TimeVoucherApp() {
               <span className="text-3xl font-bold text-foreground">
                 {mintPrice > 0n ? `${formatTon(mintPrice)} TON` : '…'}
               </span>
-              <span className="mt-1 block">
-                {tokensPerMint === 1n ? '1 TIME' : `${tokensPerMint.toString()} TIME`} per purchase
-              </span>
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              One <code className="font-mono text-foreground">TIME</code> token equals one hour for:
-            </p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>Consulting / code review</li>
-              <li>Pairing session</li>
-              <li>Architecture or product advice</li>
-            </ul>
-            <p>Sessions are remote (video call). Scheduling within 30 days of redemption unless we agree otherwise.</p>
+          <CardContent className="text-sm text-muted-foreground">
+            <p>One TIME token = one hour of consulting.</p>
           </CardContent>
         </Card>
 
         <Card id="redeem">
           <CardHeader>
             <CardTitle>Wallet & actions</CardTitle>
-            <CardDescription>Buy TIME or redeem your voucher from one place.</CardDescription>
+            <CardDescription>Buy TIME or redeem your voucher.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Tabs
-              selectedIndex={tabIndex}
+              selectedIndex={activeTab === 'buy' ? 0 : 1}
               onChange={(index) => setActiveTab(index === 0 ? 'buy' : 'redeem')}
               items={[
                 { id: 'buy', label: 'Buy TIME', content: buyPanel },
@@ -256,13 +282,7 @@ export function TimeVoucherApp() {
               ]}
             />
 
-            <Alert variant={statusVariant}>
-              {status.html ? (
-                <span dangerouslySetInnerHTML={{ __html: status.html }} />
-              ) : (
-                status.message
-              )}
-            </Alert>
+            <Alert variant={statusVariant}>{status.message}</Alert>
 
             <Accordion
               items={[
@@ -271,9 +291,10 @@ export function TimeVoucherApp() {
                   title: 'Technical details',
                   content: (
                     <ul className="space-y-1 font-mono text-xs">
-                      <li>Minter: {isConfigured ? config.minterAddress : 'Set PUBLIC_MINTER_ADDRESS'}</li>
+                      <li>Minter: {isMinterConfigured ? config.minterAddress : 'not set'}</li>
+                      <li>NFT item: {isNftMode ? config.nftItemAddress : 'not set'}</li>
                       <li>Network: {config.network}</li>
-                      <li>Redeem wallet: {config.redeemAddress || 'Set PUBLIC_REDEEM_ADDRESS'}</li>
+                      <li>Debug: add ?debug=1 to URL</li>
                     </ul>
                   ),
                 },

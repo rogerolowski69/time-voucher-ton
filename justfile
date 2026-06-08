@@ -1,219 +1,171 @@
-# Time Voucher TON — common Acton commands
-# https://github.com/casey/just
-
+# Time Voucher TON — Acton + web commands
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 default:
     @just --list
 
 # --- Toolchain ---
-
-# Show Acton version and project health
 doctor:
     acton doctor
     acton --version
 
-# Install or update the Acton CLI
 up:
     acton up
 
 # --- Build ---
-
-# Compile all contracts
 build:
     acton build
 
-# Compile JettonWallet first (generates gen/JettonWallet.code)
-build-wallet:
-    acton build JettonWallet
+build-nft:
+    acton build RedeemableNftItem
 
-# Compile JettonMinter (depends on JettonWallet)
-build-minter:
-    acton build JettonMinter
-
-# Regenerate contract wrappers from ABI
 wrapper:
     acton wrapper JettonMinter
     acton wrapper JettonWallet
+    acton wrapper RedeemableNftItem
 
-# Remove build artifacts (contracts + web)
 clean:
     rm -rf build gen web/dist web/.astro web/data
 
-# Rebuild from scratch
 rebuild: clean build
 
 # --- Quality ---
-
-# Format all Tolk sources
 fmt:
     acton fmt
 
-# Check formatting without writing changes
 fmt-check:
     acton fmt --check
 
-# Lint / type-check project sources
 check:
     acton check
 
-# Lint with GitHub Actions annotation format
-check-ci:
-    acton check --output-format github
-
-# Run the full test suite
 test:
     acton test
 
-# Run buy-time tests only
-test-buy-time:
-    acton test tests/buy-time.test.tolk
-
-# Run admin/governance tests only
-test-admin:
-    acton test tests/admin-and-governance.test.tolk
-
-# Run wallet behavior tests only
-test-wallet:
-    acton test tests/wallet-behavior.test.tolk
-
-# CI pipeline: build, format, lint, test
-ci: build fmt-check check-ci test
+ci: build fmt-check check test
 
 # --- Wallets ---
+wallet-new-local name="deployer":
+    acton wallet new --name {{name}} --local --airdrop
 
-# Create a funded local deployer wallet
 wallet-new name="deployer":
     acton wallet new --name {{name}} --local --airdrop
 
-# List configured wallets
+wallet-new-testnet name="deployer":
+    acton wallet new --name {{name}} --airdrop
+
+# Remove and recreate testnet wallet when mnemonic/keyring is missing.
+# Uses --secure false for WSL/Linux keyring compatibility with acton scripts.
+wallet-reset-testnet name="deployer":
+    acton wallet remove {{name}} -y || true
+    acton wallet new --name {{name}} --airdrop --secure false
+
+# Show deployer address + balance (fund manually if faucet 429)
+wallet-balance name="deployer":
+    @acton wallet list --balance | rg "{{name}}" || acton wallet list --balance
+
+# Print Tonkeeper funding steps when faucet is rate-limited (429)
+wallet-fund-hint name="deployer" amount_ton="0.2":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    line="$(acton wallet list --balance | rg "^[[:space:]]+{{name}}[[:space:]]" || true)"
+    if [[ -z "$line" ]]; then
+      echo "Wallet '{{name}}' not found. Run: just wallet-reset-testnet"
+      exit 1
+    fi
+    addr="$(echo "$line" | awk '{print $2}')"
+    bal="$(echo "$line" | sed -n 's/.*—[[:space:]]*\(.*\)/\1/p')"
+    non_bounce="$(cd web && node -e "const {Address}=require('@ton/core');console.log(Address.parse(process.argv[1]).toString({bounceable:false,testOnly:true}))" "$addr")"
+    nanoton="$(python3 -c "print(int(float('{{amount_ton}}') * 1_000_000_000))")"
+    echo "Deployer: {{name}}"
+    echo "Balance:  $bal"
+    echo ""
+    echo "Use NON-BOUNCEABLE address (0Q...) — paste ALL 48 characters:"
+    echo ""
+    echo "$non_bounce"
+    echo ""
+    if command -v xclip >/dev/null 2>&1; then
+      printf '%s' "$non_bounce" | xclip -selection clipboard
+      echo "(copied to clipboard)"
+    elif command -v wl-copy >/dev/null 2>&1; then
+      printf '%s' "$non_bounce" | wl-copy
+      echo "(copied to clipboard)"
+    fi
+    echo ""
+    echo "(Bounceable kQ... bounces back from uninitialized wallets — MyTonWallet will reject it.)"
+    echo ""
+    echo "Steps:"
+    echo "  1. MyTonWallet / Tonkeeper → TESTNET"
+    echo "  2. Send {{amount_ton}} TON to the 0Q address above"
+    echo "  3. Wait ~30s → just wallet-balance"
+    echo "  4. export NFT_OWNER_ADDRESS=<your wallet> && just deploy-nft-testnet-ci"
+
 wallet-list:
     acton wallet list
 
-# Request testnet coins for a wallet
 wallet-airdrop name="deployer":
-    acton wallet airdrop {{name}}
+    acton wallet airdrop {{name}} --net testnet
 
-# --- Deploy ---
-
-# Deploy minter locally (emulation)
+# --- Jetton deploy ---
 deploy: deploy-emulation
 
-# Deploy minter locally (emulation)
 deploy-emulation:
     acton run deploy-emulation
 
-# Deploy minter to testnet
 deploy-testnet:
     acton run deploy-testnet
 
-# --- Time voucher (pay-to-mint) ---
+deploy-testnet-ci:
+    ./scripts/deploy-testnet-noninteractive.sh
 
-# Buy one TIME token with TON (local emulation)
+# --- NFT deploy ---
+deploy-nft: deploy-nft-emulation
+
+deploy-nft-emulation:
+    acton run deploy-nft-emulation
+
+deploy-nft-testnet:
+    acton run deploy-nft-testnet
+
+# Non-interactive NFT deploy (requires NFT_OWNER_ADDRESS)
+deploy-nft-testnet-ci:
+    ./scripts/deploy-nft-testnet-noninteractive.sh
+
+# Write PUBLIC_NFT_ITEM_ADDRESS into web/.env after deploy
+deploy-nft-testnet-ci-write-env:
+    WRITE_WEB_ENV=1 ./scripts/deploy-nft-testnet-noninteractive.sh
+
+nft-info:
+    acton run nft-info
+
+nft-info-testnet:
+    acton script scripts/nft-info.tolk --net testnet
+
+# --- Jetton ops ---
 buy-time:
     acton run buy-time
 
-# Buy one TIME token with TON (testnet)
 buy-time-testnet:
     acton script scripts/buy-time.tolk --net testnet
 
-# Withdraw earned TON from minter (local emulation)
-withdraw:
-    acton run withdraw
-
-# Withdraw earned TON from minter (testnet)
-withdraw-testnet:
-    acton script scripts/withdraw.tolk --net testnet
-
-# --- Jetton admin ---
-
-# Mint jettons as admin (local emulation)
-mint:
-    acton run jetton-mint
-
-# Mint jettons as admin (testnet)
-mint-testnet:
-    acton script scripts/mint.tolk --net testnet
-
-# Transfer jettons between wallets (local emulation)
-transfer:
-    acton run jetton-transfer
-
-# Transfer jettons (testnet)
-transfer-testnet:
-    acton script scripts/transfer.tolk --net testnet
-
-# Show minter and wallet info (local emulation)
-info:
-    acton run jetton-info
-
-# Show minter and wallet info (testnet)
 info-testnet:
     acton script scripts/info.tolk --net testnet
 
-# Propose a new admin address (local emulation)
-change-admin:
-    acton run jetton-change-admin
+verify-all:
+    acton verify JettonMinter
+    acton verify JettonWallet
+    acton verify RedeemableNftItem
 
-# Propose a new admin address (testnet)
-change-admin-testnet:
-    acton script scripts/change-admin.tolk --net testnet
-
-# Claim pending admin role (local emulation)
-claim-admin:
-    acton run jetton-claim-admin
-
-# Claim pending admin role (testnet)
-claim-admin-testnet:
-    acton script scripts/claim-admin.tolk --net testnet
-
-# Update jetton metadata (local emulation)
-change-metadata:
-    acton run jetton-change-metadata
-
-# Update jetton metadata (testnet)
-change-metadata-testnet:
-    acton script scripts/change-metadata.tolk --net testnet
-
-# --- Verify ---
-
-# Verify contract source on TON Verifier
-verify contract="JettonMinter":
-    acton verify {{contract}}
-
-# --- Dev workflow ---
-
-# Install web + API dependencies
+# --- Web ---
 web-install:
     cd web && npm install
     cd web/api && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# Run Astro frontend + FastAPI (http://localhost:4321, API :8787)
 web-dev: web-install
     cd web && npm run dev
 
-# Run only the FastAPI backend
-web-api: web-install
-    cd web && npm run dev:api
-
-# View logged purchase/redeem events (requires ADMIN_API_TOKEN in env)
-events:
-    curl -s -H "Authorization: Bearer ${ADMIN_API_TOKEN:?set ADMIN_API_TOKEN}" http://localhost:8787/api/admin/events | python3 -m json.tool
-
-# Build Astro static site
 web-build: web-install
     cd web && npm run build
 
-# Preview production build (static + FastAPI on PORT)
-web-preview: web-install
-    cd web && npm run preview
-
-# Run production FastAPI server locally (after build)
-web-start: web-build
-    cd web && npm start
-
-# Typical local dev loop after contract changes
-dev: build test
-
-# Full local flow: deploy, buy time, show balances
-demo: deploy-emulation buy-time info
+web-test:
+    cd web && npm run test

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { debugLog } from '@/lib/debug';
 import { initTelegramWebApp, type TelegramAuthState } from '@/lib/telegram';
 
 export type StatusKind = 'info' | 'ok' | 'error';
@@ -16,6 +17,9 @@ interface VoucherState {
   tokensPerMint: bigint;
   connectedWalletAddress: string | undefined;
   currentTimeBalance: bigint;
+  nftRedeemed: boolean | null;
+  canShowBooking: boolean;
+  canShowRedeem: boolean;
   status: StatusState;
   showBookNow: boolean;
   buying: boolean;
@@ -24,6 +28,7 @@ interface VoucherState {
   setTelegramAuth: (auth: TelegramAuthState) => void;
   setMinterData: (price: bigint, perMint: bigint) => void;
   setWalletBalance: (address: string, balance: bigint) => void;
+  setNftAccess: (redeemed: boolean | null, canShowBooking: boolean, canShowRedeem: boolean) => void;
   clearWallet: () => void;
   setStatus: (status: StatusState) => void;
   setPlainStatus: (message: string, kind?: StatusKind) => void;
@@ -39,6 +44,9 @@ export const useVoucherStore = create<VoucherState>((set) => ({
   tokensPerMint: 1n,
   connectedWalletAddress: undefined,
   currentTimeBalance: 0n,
+  nftRedeemed: null,
+  canShowBooking: false,
+  canShowRedeem: false,
   status: {
     message: 'Connect a wallet to buy TIME.',
     kind: 'info',
@@ -51,9 +59,21 @@ export const useVoucherStore = create<VoucherState>((set) => ({
   setMinterData: (mintPrice, tokensPerMint) => set({ mintPrice, tokensPerMint }),
   setWalletBalance: (connectedWalletAddress, currentTimeBalance) =>
     set({ connectedWalletAddress, currentTimeBalance }),
-  clearWallet: () => set({ connectedWalletAddress: undefined, currentTimeBalance: 0n }),
+  setNftAccess: (nftRedeemed, canShowBooking, canShowRedeem) =>
+    set({ nftRedeemed, canShowBooking, canShowRedeem }),
+  clearWallet: () =>
+    set({
+      connectedWalletAddress: undefined,
+      currentTimeBalance: 0n,
+      nftRedeemed: null,
+      canShowBooking: false,
+      canShowRedeem: false,
+    }),
   setStatus: (status) => set({ status }),
-  setPlainStatus: (message, kind = 'info') => set({ status: { message, kind } }),
+  setPlainStatus: (message, kind = 'info') => {
+    debugLog('status', { kind, message });
+    set({ status: { message, kind } });
+  },
   setShowBookNow: (showBookNow) => set({ showBookNow }),
   setBuying: (buying) => set({ buying }),
   setRedeeming: (redeeming) => set({ redeeming }),

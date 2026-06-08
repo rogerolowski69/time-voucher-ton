@@ -17,6 +17,11 @@ display-name = "TimeVoucherWallet"
 src = "contracts/JettonWallet.tolk"
 depends = []
 
+[contracts.RedeemableNftItem]
+display-name = "RedeemableNftItem"
+src = "contracts/RedeemableNftItem.tolk"
+depends = []
+
 [test]
 
 [fmt]
@@ -34,6 +39,10 @@ jetton-mint = "acton script scripts/mint.tolk"
 jetton-transfer = "acton script scripts/transfer.tolk"
 buy-time = "acton script scripts/buy-time.tolk"
 withdraw = "acton script scripts/withdraw.tolk"
+deploy-nft-emulation = "acton script scripts/deploy-nft-item.tolk"
+deploy-nft-testnet = "acton script scripts/deploy-nft-item.tolk --net testnet"
+nft-info = "acton script scripts/nft-info.tolk"
+nft-info-testnet = "acton script scripts/nft-info.tolk --net testnet"
 
 [import-mappings]
 acton = ".acton"

@@ -4,6 +4,7 @@ export type NetworkMode = 'mainnet' | 'testnet';
 
 export interface AppConfig {
   minterAddress: string;
+  nftItemAddress: string;
   network: NetworkMode;
   chain: CHAIN;
   rpcUrl: string;
@@ -22,9 +23,11 @@ function networkFromEnv(): NetworkMode {
 export function loadConfig(): AppConfig {
   const network = networkFromEnv();
   const minterAddress = import.meta.env.PUBLIC_MINTER_ADDRESS?.trim() ?? '';
+  const nftItemAddress = import.meta.env.PUBLIC_NFT_ITEM_ADDRESS?.trim() ?? '';
 
   return {
     minterAddress,
+    nftItemAddress,
     network,
     chain: network === 'mainnet' ? CHAIN.MAINNET : CHAIN.TESTNET,
     rpcUrl:

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from config import resolve_public_url
 from db import StoredEvent, get_database_path, init_db, list_events, log_event
+from nft_redeem import fetch_redeem_data
 from telegram import parse_telegram_user, validate_telegram_init_data
 from tx_verify import TxVerificationError, verify_purchase_boc, verify_redeem_boc
 
@@ -49,6 +50,15 @@ class EventBody(BaseModel):
     tonAmount: str | None = None
     network: str | None = None
     note: str | None = None
+    nftItemAddress: str | None = None
+
+
+class WebhookTonBody(BaseModel):
+    txHash: str | None = None
+    accountId: str | None = None
+    nftItemAddress: str | None = None
+    walletAddress: str | None = None
+    network: str | None = None
 
 
 class TelegramVerifyBody(BaseModel):
@@ -145,11 +155,27 @@ def handle_redeem_log(body: EventBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="walletAddress is required")
     if not body.boc:
         raise HTTPException(status_code=400, detail="boc is required")
-    if not body.redeemAddress:
-        raise HTTPException(status_code=400, detail="redeemAddress is required")
 
     try:
-        telegram = resolve_telegram_context(body.initData, required=True)
+        telegram = resolve_telegram_context(body.initData, required=bool(body.redeemAddress))
+
+        if body.nftItemAddress:
+            event = log_event(
+                eventType="redeem",
+                walletAddress=body.walletAddress,
+                txBoc=body.boc,
+                txHash=None,
+                minterAddress=body.nftItemAddress,
+                redeemAddress=body.redeemAddress,
+                note=body.note or "nft redeem",
+                network=body.network,
+                **telegram,
+            )
+            return {"ok": True, "event": event_payload(event)}
+
+        if not body.redeemAddress:
+            raise HTTPException(status_code=400, detail="redeemAddress is required")
+
         verified = verify_redeem_boc(
             body.boc,
             wallet_address=body.walletAddress,
@@ -218,6 +244,56 @@ def log_purchase(body: EventBody) -> dict[str, Any]:
 @app.post("/api/events/redeem")
 def log_redeem(body: EventBody) -> dict[str, Any]:
     return handle_redeem_log(body)
+
+
+@app.get("/api/nft/redeem-status")
+async def nft_redeem_status(
+    nftItemAddress: str = Query(min_length=1),
+    walletAddress: str = Query(min_length=1),
+    network: str | None = Query(default=None),
+) -> dict[str, Any]:
+    try:
+        data = await fetch_redeem_data(nftItemAddress, network=network)
+        owner = data["ownerAddress"]
+        redeemed = data["redeemed"]
+        is_owner = owner == walletAddress
+        return {
+            "ok": True,
+            "ownerAddress": owner,
+            "redeemed": redeemed,
+            "isOwner": is_owner,
+            "canAccessBookingLink": is_owner and redeemed,
+            "canOpenRedeemPage": is_owner and not redeemed,
+        }
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/webhooks/ton")
+def ton_webhook(
+    body: WebhookTonBody,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Indexer webhook — use when TonAPI/Toncenter notifies you of on-chain redeem txs."""
+    if not ADMIN_API_TOKEN:
+        raise HTTPException(status_code=503, detail="ADMIN_API_TOKEN is not configured")
+
+    expected = f"Bearer {ADMIN_API_TOKEN}"
+    if not authorization or not secrets.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if not body.walletAddress or not body.nftItemAddress:
+        raise HTTPException(status_code=400, detail="walletAddress and nftItemAddress required")
+
+    event = log_event(
+        eventType="redeem",
+        walletAddress=body.walletAddress,
+        txHash=body.txHash,
+        minterAddress=body.nftItemAddress,
+        note="webhook ton indexer",
+        network=body.network,
+    )
+    return {"ok": True, "event": event_payload(event)}
 
 
 @app.get("/api/admin/events")
