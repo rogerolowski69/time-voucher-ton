@@ -205,7 +205,7 @@ export function useVoucherActions(
 
     try {
       const result = await sendTonConnectTransaction(tonConnectUI, 'buy', {
-        validUntil: Math.floor(Date.now() / 1000) + 600,
+        validUntil: Math.floor(Date.now() / 1000) + 300,
         network: config.chain,
         messages: [
           {
@@ -285,7 +285,7 @@ export function useVoucherActions(
 
     try {
       const result = await sendTonConnectTransaction(tonConnectUI, 'nft-redeem', {
-        validUntil: Math.floor(Date.now() / 1000) + 600,
+        validUntil: Math.floor(Date.now() / 1000) + 300,
         network: config.chain,
         messages: [
           {
@@ -366,7 +366,7 @@ export function useVoucherActions(
       const jettonWallet = await fetchJettonWalletAddress(client, minter, owner);
 
       const result = await sendTonConnectTransaction(tonConnectUI, 'jetton-redeem', {
-        validUntil: Math.floor(Date.now() / 1000) + 600,
+        validUntil: Math.floor(Date.now() / 1000) + 300,
         network: config.chain,
         messages: [
           {

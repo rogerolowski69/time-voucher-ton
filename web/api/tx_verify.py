@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from pytoniq_core import Address, Cell, Slice
+from pytoniq_core.tlb import InternalMsgInfo, MessageAny
 
 BUY_TIME_OPCODE = 0x8F4E2B17
 ASK_TO_TRANSFER_OPCODE = 0x0F8A7EA5
@@ -76,6 +77,76 @@ def _skip_msg_address(slice_: Slice) -> None:
         slice_.load_bytes(32)
         return
     raise TxVerificationError("Unsupported address type in message header")
+
+
+def _collect_cells(cell: Cell) -> list[Cell]:
+    seen: set[str] = set()
+    stack = [cell]
+    collected: list[Cell] = []
+
+    while stack:
+        current = stack.pop()
+        cell_hash = current.hash.hex()
+        if cell_hash in seen:
+            continue
+        seen.add(cell_hash)
+        collected.append(current)
+        stack.extend(current.refs)
+
+    return collected
+
+
+def _cells_from_boc(boc: str) -> list[Cell]:
+    data = base64.b64decode(boc)
+    try:
+        cells = Cell.from_boc(data)
+        if cells:
+            return cells
+    except Exception:
+        pass
+
+    try:
+        return [Cell.one_from_boc(data)]
+    except Exception as error:
+        raise TxVerificationError("Invalid transaction BOC") from error
+
+
+def _try_parse_message(cell: Cell) -> MessageAny | None:
+    try:
+        return MessageAny.deserialize(cell.begin_parse())
+    except Exception:
+        return None
+
+
+def extract_messages_from_boc(boc: str) -> list[MessageAny]:
+    """Parse every MessageAny reachable in a TonConnect signed BOC bag."""
+    messages: list[MessageAny] = []
+    seen_hashes: set[str] = set()
+
+    for root in _cells_from_boc(boc):
+        for cell in _collect_cells(root):
+            cell_hash = cell.hash.hex()
+            if cell_hash in seen_hashes:
+                continue
+            seen_hashes.add(cell_hash)
+
+            message = _try_parse_message(cell)
+            if message is not None:
+                messages.append(message)
+
+    return messages
+
+
+def _message_destination(message: MessageAny) -> str:
+    if isinstance(message.info, InternalMsgInfo):
+        return message.info.dest.to_str(is_user_friendly=False)
+    return message.info.dest.to_str(is_user_friendly=False)
+
+
+def _message_value_nanoton(message: MessageAny) -> int:
+    if isinstance(message.info, InternalMsgInfo):
+        return int(message.info.value_coins)
+    return int(message.info.import_fee)
 
 
 def parse_external_message(boc: str) -> ParsedExternalMessage:
@@ -180,6 +251,50 @@ def lookup_tx_hash(
     return None
 
 
+def _verified_purchase_from_message(
+    message: MessageAny,
+    *,
+    expected_minter: str,
+    mint_price: str | None,
+    wallet_address: str,
+    network: str | None,
+) -> VerifiedPurchase:
+    destination = _message_destination(message)
+    if not _addresses_equal(destination, expected_minter):
+        raise TxVerificationError(
+            f"Transaction destination does not match minter address "
+            f"(tx={destination}, expected={expected_minter})"
+        )
+
+    body_slice = message.body.begin_parse()
+    if body_slice.remaining_bits < 32:
+        raise TxVerificationError("Message body is too short")
+
+    opcode = body_slice.load_uint(32)
+    if opcode != BUY_TIME_OPCODE:
+        raise TxVerificationError("Transaction body is not a BuyTime message")
+
+    value_nanoton = _message_value_nanoton(message)
+    if mint_price is not None and value_nanoton < int(mint_price):
+        raise TxVerificationError("Attached TON is below declared mint price")
+
+    body_hash = message.body.hash.hex()
+    tx_hash = lookup_tx_hash(
+        wallet_address,
+        body_hash,
+        network,
+        os.environ.get("TONCENTER_API_KEY", "").strip() or None,
+    )
+
+    return VerifiedPurchase(
+        destination=destination,
+        import_fee=value_nanoton,
+        opcode=opcode,
+        body_hash=body_hash,
+        tx_hash=tx_hash,
+    )
+
+
 def verify_purchase_boc(
     boc: str,
     *,
@@ -188,54 +303,74 @@ def verify_purchase_boc(
     mint_price: str | None,
     network: str | None = None,
 ) -> VerifiedPurchase:
-    parsed = parse_external_message(boc)
     expected_minter = _normalize_address(minter_address)
+    errors: list[str] = []
 
-    if not _addresses_equal(parsed.destination, expected_minter):
-        raise TxVerificationError(
-            f"Transaction destination does not match minter address "
-            f"(tx={parsed.destination}, expected={expected_minter})"
-        )
+    for message in extract_messages_from_boc(boc):
+        if not message.is_internal:
+            continue
+        try:
+            return _verified_purchase_from_message(
+                message,
+                expected_minter=expected_minter,
+                mint_price=mint_price,
+                wallet_address=wallet_address,
+                network=network,
+            )
+        except TxVerificationError as error:
+            errors.append(str(error))
 
-    body_slice = parsed.body.begin_parse()
-    if body_slice.remaining_bits < 32:
-        raise TxVerificationError("Message body is too short")
+    try:
+        parsed = parse_external_message(boc)
+        if not _addresses_equal(parsed.destination, expected_minter):
+            raise TxVerificationError(
+                f"Transaction destination does not match minter address "
+                f"(tx={parsed.destination}, expected={expected_minter})"
+            )
 
-    opcode = body_slice.load_uint(32)
-    if opcode != BUY_TIME_OPCODE:
-        raise TxVerificationError("Transaction body is not a BuyTime message")
+        body_slice = parsed.body.begin_parse()
+        if body_slice.remaining_bits < 32:
+            raise TxVerificationError("Message body is too short")
 
-    if mint_price is not None:
-        required = int(mint_price)
-        if parsed.import_fee < required:
+        opcode = body_slice.load_uint(32)
+        if opcode != BUY_TIME_OPCODE:
+            raise TxVerificationError("Transaction body is not a BuyTime message")
+
+        if mint_price is not None and parsed.import_fee < int(mint_price):
             raise TxVerificationError("Attached TON is below declared mint price")
 
-    tx_hash = lookup_tx_hash(
-        wallet_address,
-        parsed.body_hash,
-        network,
-        os.environ.get("TONCENTER_API_KEY", "").strip() or None,
-    )
+        body_hash = parsed.body_hash
+        tx_hash = lookup_tx_hash(
+            wallet_address,
+            body_hash,
+            network,
+            os.environ.get("TONCENTER_API_KEY", "").strip() or None,
+        )
+        return VerifiedPurchase(
+            destination=parsed.destination,
+            import_fee=parsed.import_fee,
+            opcode=opcode,
+            body_hash=body_hash,
+            tx_hash=tx_hash,
+        )
+    except TxVerificationError as error:
+        errors.append(str(error))
 
-    return VerifiedPurchase(
-        destination=parsed.destination,
-        import_fee=parsed.import_fee,
-        opcode=opcode,
-        body_hash=parsed.body_hash,
-        tx_hash=tx_hash,
-    )
+    detail = errors[0] if errors else "No BuyTime message to minter found in transaction BOC"
+    raise TxVerificationError(detail)
 
 
-def verify_redeem_boc(
-    boc: str,
+def _verified_redeem_from_body(
     *,
-    wallet_address: str,
+    destination: str,
+    import_fee: int,
+    body: Cell,
     redeem_address: str,
     jetton_amount: str | None,
-    network: str | None = None,
+    wallet_address: str,
+    network: str | None,
 ) -> VerifiedRedeem:
-    parsed = parse_external_message(boc)
-    body_slice = parsed.body.begin_parse()
+    body_slice = body.begin_parse()
     if body_slice.remaining_bits < 32:
         raise TxVerificationError("Message body is too short")
 
@@ -255,19 +390,64 @@ def verify_redeem_boc(
     if jetton_amount is not None and amount < int(jetton_amount):
         raise TxVerificationError("Transferred jetton amount is below declared redeem amount")
 
+    body_hash = body.hash.hex()
     tx_hash = lookup_tx_hash(
         wallet_address,
-        parsed.body_hash,
+        body_hash,
         network,
         os.environ.get("TONCENTER_API_KEY", "").strip() or None,
     )
 
     return VerifiedRedeem(
-        destination=parsed.destination,
-        import_fee=parsed.import_fee,
+        destination=destination,
+        import_fee=import_fee,
         opcode=opcode,
         jetton_amount=amount,
         redeem_address=recipient,
-        body_hash=parsed.body_hash,
+        body_hash=body_hash,
         tx_hash=tx_hash,
     )
+
+
+def verify_redeem_boc(
+    boc: str,
+    *,
+    wallet_address: str,
+    redeem_address: str,
+    jetton_amount: str | None,
+    network: str | None = None,
+) -> VerifiedRedeem:
+    errors: list[str] = []
+
+    for message in extract_messages_from_boc(boc):
+        if not message.is_internal:
+            continue
+        try:
+            return _verified_redeem_from_body(
+                destination=_message_destination(message),
+                import_fee=_message_value_nanoton(message),
+                body=message.body,
+                redeem_address=redeem_address,
+                jetton_amount=jetton_amount,
+                wallet_address=wallet_address,
+                network=network,
+            )
+        except TxVerificationError as error:
+            errors.append(str(error))
+
+    try:
+        parsed = parse_external_message(boc)
+        return _verified_redeem_from_body(
+            destination=parsed.destination,
+            import_fee=parsed.import_fee,
+            body=parsed.body,
+            redeem_address=redeem_address,
+            jetton_amount=jetton_amount,
+            wallet_address=wallet_address,
+            network=network,
+        )
+    except TxVerificationError as error:
+        errors.append(str(error))
+
+    detail = errors[0] if errors else "No jetton transfer to redeem address found in transaction BOC"
+    raise TxVerificationError(detail)
