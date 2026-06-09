@@ -30,6 +30,8 @@ def test_tonconnect_manifest_uses_forwarded_host() -> None:
     assert body["url"] == "http://localhost:4321"
     assert body["name"] == "Time Voucher"
     assert body["iconUrl"] == "http://localhost:4321/icon-180.png"
+    assert body["termsOfUseUrl"] == "http://localhost:4321"
+    assert body["privacyPolicyUrl"] == "http://localhost:4321"
     assert "icon.svg" not in body["iconUrl"]
 
 
@@ -59,5 +61,8 @@ def test_tonconnect_manifest_falls_back_to_public_url(monkeypatch) -> None:
     response = client.get("/tonconnect-manifest.json")
     assert response.status_code == 200
     body = response.json()
-    assert body["url"] == "https://time-voucher-ton-production.up.railway.app"
-    assert body["iconUrl"].endswith("/icon-180.png")
+    production = "https://time-voucher-ton-production.up.railway.app"
+    assert body["url"] == production
+    assert body["iconUrl"] == f"{production}/icon-180.png"
+    assert body["termsOfUseUrl"] == production
+    assert body["privacyPolicyUrl"] == production

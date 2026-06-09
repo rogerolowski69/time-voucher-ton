@@ -344,6 +344,8 @@ def tonconnect_manifest(request: Request) -> dict[str, str]:
         "url": origin,
         "name": "Time Voucher",
         "iconUrl": f"{origin}/icon-180.png",
+        "termsOfUseUrl": origin,
+        "privacyPolicyUrl": origin,
     }
 
 
