@@ -4,6 +4,9 @@ import type { TonClient } from '@ton/ton';
 import { useCallback } from 'preact/hooks';
 
 import { debugError, debugLog, debugWarn } from '@/lib/debug';
+import { logTonConnectError } from '@/lib/tonconnect-debug';
+import { tonConnectUserMessage } from '@/lib/tonconnect-errors';
+import { sendTonConnectTransaction } from '@/lib/tonconnect';
 import { buildCalBookingUrl } from '@/lib/cal-booking';
 import type { AppConfig } from '@/lib/config';
 import { logPurchaseEvent, logRedeemEvent, tonscanTxUrl } from '@/lib/events-api';
@@ -51,6 +54,13 @@ export function useVoucherActions(
       return null;
     }
 
+    if (config.nftItemAddress && config.minterAddress === config.nftItemAddress) {
+      debugWarn('minter.refresh.skip', {
+        reason: 'PUBLIC_MINTER_ADDRESS must not be the NFT item address',
+      });
+      return null;
+    }
+
     debugLog('minter.refresh.start', { minterAddress: config.minterAddress });
     try {
       const minter = Address.parse(config.minterAddress);
@@ -63,13 +73,15 @@ export function useVoucherActions(
       return { price, perMint };
     } catch (error) {
       debugError('minter.refresh.fail', error);
-      store.getState().setPlainStatus(
-        error instanceof Error ? error.message : 'Could not load minter price from chain.',
-        'error',
-      );
+      if (!config.nftItemAddress) {
+        store.getState().setPlainStatus(
+          error instanceof Error ? error.message : 'Could not load minter price from chain.',
+          'error',
+        );
+      }
       return null;
     }
-  }, [client, config.minterAddress, store]);
+  }, [client, config.minterAddress, config.nftItemAddress, store]);
 
   const refreshNftAccess = useCallback(
     async (address: string): Promise<void> => {
@@ -96,18 +108,19 @@ export function useVoucherActions(
 
   const refreshWalletBalance = useCallback(
     async (address: string): Promise<void> => {
+      const owner = Address.parse(address);
+      const normalized = owner.toString({ bounceable: false, testOnly });
+
       if (!config.minterAddress) {
+        store.getState().setWalletBalance(normalized, 0n);
+        await refreshNftAccess(address);
         return;
       }
 
       try {
         const minter = Address.parse(config.minterAddress);
-        const owner = Address.parse(address);
         const balance = await fetchJettonBalance(client, minter, owner);
-        store.getState().setWalletBalance(
-          owner.toString({ bounceable: false, testOnly }),
-          balance,
-        );
+        store.getState().setWalletBalance(normalized, balance);
         await refreshNftAccess(address);
       } catch (error) {
         debugError('wallet.balance.fail', error, { address });
@@ -150,6 +163,14 @@ export function useVoucherActions(
     }
 
     if (!config.minterAddress) {
+      if (config.nftItemAddress) {
+        store.getState().setPlainStatus(
+          'NFT redeem mode — jetton minter not deployed. Connect wallet and use the Redeem tab.',
+          'info',
+        );
+        store.getState().setActiveTab('redeem');
+        return;
+      }
       store.getState().setPlainStatus('Set PUBLIC_MINTER_ADDRESS in Railway variables and redeploy.', 'error');
       return;
     }
@@ -159,10 +180,11 @@ export function useVoucherActions(
       debugLog('buy.noWallet', { action: 'opening TonConnect modal' });
       try {
         await tonConnectUI.openModal();
+        store.getState().setPlainStatus('Connect your TON wallet to continue.', 'info');
       } catch (error) {
-        debugError('buy.tonConnectModal.fail', error);
+        logTonConnectError('buy.modal', error);
+        store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
       }
-      store.getState().setPlainStatus('Connect your TON wallet to continue.', 'info');
       return;
     }
 
@@ -182,7 +204,7 @@ export function useVoucherActions(
     store.getState().setPlainStatus('Confirm the purchase in your wallet…', 'info');
 
     try {
-      const result = await tonConnectUI.sendTransaction({
+      const result = await sendTonConnectTransaction(tonConnectUI, 'buy', {
         validUntil: Math.floor(Date.now() / 1000) + 600,
         network: config.chain,
         messages: [
@@ -193,7 +215,6 @@ export function useVoucherActions(
           },
         ],
       });
-      debugLog('buy.sendTransaction.ok', { bocLength: result.boc.length });
 
       try {
         await logPurchaseEvent({
@@ -213,11 +234,7 @@ export function useVoucherActions(
 
       await refreshWalletBalance(wallet.account.address);
     } catch (error) {
-      debugError('buy.fail', error);
-      store.getState().setPlainStatus(
-        error instanceof Error ? error.message : 'Purchase was cancelled or failed.',
-        'error',
-      );
+      store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
     } finally {
       store.getState().setBuying(false);
     }
@@ -238,8 +255,13 @@ export function useVoucherActions(
 
     const wallet = tonConnectUI.wallet;
     if (!wallet) {
-      await tonConnectUI.openModal();
-      store.getState().setPlainStatus('Connect your TON wallet to redeem.', 'info');
+      try {
+        await tonConnectUI.openModal();
+        store.getState().setPlainStatus('Connect your TON wallet to redeem.', 'info');
+      } catch (error) {
+        logTonConnectError('nft.modal', error);
+        store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
+      }
       return;
     }
 
@@ -258,7 +280,7 @@ export function useVoucherActions(
     store.getState().setPlainStatus('Confirm NFT redeem in your wallet…', 'info');
 
     try {
-      const result = await tonConnectUI.sendTransaction({
+      const result = await sendTonConnectTransaction(tonConnectUI, 'nft-redeem', {
         validUntil: Math.floor(Date.now() / 1000) + 600,
         network: config.chain,
         messages: [
@@ -269,7 +291,6 @@ export function useVoucherActions(
           },
         ],
       });
-      debugLog('nft.redeem.tx.ok', { bocLength: result.boc.length });
 
       try {
         await logRedeemEvent({
@@ -287,11 +308,7 @@ export function useVoucherActions(
       store.getState().setShowBookNow(true);
       store.getState().setPlainStatus('NFT redeemed on-chain. Booking link unlocked.', 'ok');
     } catch (error) {
-      debugError('nft.redeem.fail', error);
-      store.getState().setPlainStatus(
-        error instanceof Error ? error.message : 'NFT redeem cancelled or failed.',
-        'error',
-      );
+      store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
     } finally {
       store.getState().setRedeeming(false);
     }
@@ -314,8 +331,13 @@ export function useVoucherActions(
 
     const wallet = tonConnectUI.wallet;
     if (!wallet) {
-      await tonConnectUI.openModal();
-      store.getState().setPlainStatus('Connect your TON wallet to redeem TIME.', 'info');
+      try {
+        await tonConnectUI.openModal();
+        store.getState().setPlainStatus('Connect your TON wallet to redeem TIME.', 'info');
+      } catch (error) {
+        logTonConnectError('jetton.modal', error);
+        store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
+      }
       return;
     }
 
@@ -339,7 +361,7 @@ export function useVoucherActions(
       const issuer = Address.parse(config.redeemAddress);
       const jettonWallet = await fetchJettonWalletAddress(client, minter, owner);
 
-      const result = await tonConnectUI.sendTransaction({
+      const result = await sendTonConnectTransaction(tonConnectUI, 'jetton-redeem', {
         validUntil: Math.floor(Date.now() / 1000) + 600,
         network: config.chain,
         messages: [
@@ -364,11 +386,7 @@ export function useVoucherActions(
       store.getState().setShowBookNow(true);
       store.getState().setPlainStatus('Redemption complete. Book your hour below.', 'ok');
     } catch (error) {
-      debugError('jetton.redeem.fail', error);
-      store.getState().setPlainStatus(
-        error instanceof Error ? error.message : 'Redemption was cancelled or failed.',
-        'error',
-      );
+      store.getState().setPlainStatus(tonConnectUserMessage(error), 'error');
     } finally {
       store.getState().setRedeeming(false);
     }

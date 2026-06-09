@@ -25,8 +25,26 @@ export default defineConfig({
     },
     server: {
       proxy: {
-        '/api': 'http://127.0.0.1:8787',
-        '/tonconnect-manifest.json': 'http://127.0.0.1:8787',
+        '/api': {
+          target: 'http://127.0.0.1:8787',
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq, req) => {
+              const host = req.headers.host ?? 'localhost:4321';
+              proxyReq.setHeader('X-Forwarded-Host', host);
+              proxyReq.setHeader('X-Forwarded-Proto', 'http');
+            });
+          },
+        },
+        '/tonconnect-manifest.json': {
+          target: 'http://127.0.0.1:8787',
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq, req) => {
+              const host = req.headers.host ?? 'localhost:4321';
+              proxyReq.setHeader('X-Forwarded-Host', host);
+              proxyReq.setHeader('X-Forwarded-Proto', 'http');
+            });
+          },
+        },
       },
     },
   },

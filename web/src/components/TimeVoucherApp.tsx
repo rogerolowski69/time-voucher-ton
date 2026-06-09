@@ -1,8 +1,10 @@
 import type { TonConnectUI } from '@tonconnect/ui';
-import { TonConnectUI as TonConnectUIClass } from '@tonconnect/ui';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
+import { TonConnectDiagnostics } from '@/components/TonConnectDiagnostics';
 import { debugError, debugLog } from '@/lib/debug';
+import { createTonConnect } from '@/lib/tonconnect';
+import { tonConnectUserMessage } from '@/lib/tonconnect-errors';
 import { loadConfig } from '@/lib/config';
 import { formatTon } from '@/lib/minter';
 import { formatTelegramUser } from '@/lib/telegram';
@@ -25,7 +27,9 @@ function shortAddress(address: string): string {
 export function TimeVoucherApp() {
   const [tonConnectUI, setTonConnectUI] = useState<TonConnectUI | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [booting, setBooting] = useState(true);
+  const [manifestWarning, setManifestWarning] = useState<string | null>(null);
+  const [connectStep, setConnectStep] = useState<string>('idle');
+  const tonConnectRef = useRef<ReturnType<typeof createTonConnect> | null>(null);
 
   const client = useMemo(() => createTonClient(config.rpcUrl, config.toncenterApiKey), []);
 
@@ -75,53 +79,74 @@ export function TimeVoucherApp() {
     void refreshMinterData();
 
     try {
-      debugLog('tonconnect.init.start');
-      const ui = new TonConnectUIClass({
-        manifestUrl: `${window.location.origin}/tonconnect-manifest.json`,
-        buttonRootId: 'ton-connect-button',
+      const handle = createTonConnect({
+        onManifestError: (message) => setManifestWarning(message),
+        onDiagnostics: (passed) => {
+          if (!passed) {
+            setManifestWarning(
+              'TonConnect manifest check failed — open Technical details → TonConnect diagnostics.',
+            );
+          }
+        },
       });
-      setTonConnectUI(ui);
-      debugLog('tonconnect.init.ok');
+      tonConnectRef.current = handle;
+      setTonConnectUI(handle.ui);
 
-      const unsubscribe = ui.onStatusChange(async (wallet) => {
+      const unsubscribe = handle.ui.onStatusChange(async (wallet) => {
         if (!wallet) {
+          debugLog('wallet.disconnected');
           useVoucherStore.getState().clearWallet();
           setPlainStatus('Wallet disconnected.', 'info');
           return;
         }
-        debugLog('wallet.connected', { address: wallet.account.address });
+        debugLog('wallet.connected', {
+          address: wallet.account.address,
+          chain: wallet.account.chain,
+          walletName: wallet.device.appName,
+        });
+        setConnectStep('3.connected');
         await refreshWalletBalance(wallet.account.address);
         const auth = useVoucherStore.getState().telegramAuth;
         const who = auth.user ? formatTelegramUser(auth.user) : 'Wallet connected';
         setPlainStatus(`${who} — you can buy or redeem below.`, 'ok');
       });
 
-      setBooting(false);
-      return () => unsubscribe();
+      return () => {
+        unsubscribe();
+        handle.dispose();
+        tonConnectRef.current = null;
+      };
     } catch (error) {
       debugError('tonconnect.init.fail', error);
-      setBootError(error instanceof Error ? error.message : 'TonConnect failed to initialize');
-      setBooting(false);
+      setBootError(tonConnectUserMessage(error));
     }
   }, []);
 
-  if (booting) {
-    return (
-      <Alert variant="info">
-        <p className="font-semibold">Loading wallet UI…</p>
-        <p className="text-sm text-muted-foreground">TonConnect and chain data are initializing.</p>
-      </Alert>
-    );
-  }
-
-  if (bootError) {
-    return (
-      <Alert variant="error">
-        <p className="font-semibold">Wallet UI boot failed</p>
-        <p className="text-sm">{bootError}</p>
-      </Alert>
-    );
-  }
+  const handleConnectWallet = (): void => {
+    if (!tonConnectRef.current) {
+      setPlainStatus('Wallet UI is still loading. Try again in a moment.', 'info');
+      return;
+    }
+    debugLog('wallet.connect.click', { origin: window.location.origin });
+    setConnectStep('1.opening-tonconnect-modal');
+    setPlainStatus('Step 1/4: Opening TonConnect wallet picker…', 'info');
+    void tonConnectRef.current
+      .openConnectModal()
+      .then(() => {
+        if (!useVoucherStore.getState().connectedWalletAddress) {
+          setConnectStep('2.waiting-wallet-approval');
+          setPlainStatus(
+            'Step 2/4: Approve connection in MyTonWallet/Tonkeeper (bridge tab may open).',
+            'info',
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        setConnectStep('failed');
+        debugError('wallet.connect.fail', error);
+        setPlainStatus(tonConnectUserMessage(error), 'error');
+      });
+  };
 
   const buyLabel =
     tokensPerMint === 1n
@@ -162,21 +187,41 @@ export function TimeVoucherApp() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <div id="ton-connect-button" className="min-h-11" />
+        <Button variant="secondary" disabled={!tonConnectUI} onClick={handleConnectWallet}>
+          {connectedWalletAddress ? 'Wallet connected' : 'Connect wallet'}
+        </Button>
         <Button
-          disabled={buying}
+          disabled={buying || !isMinterConfigured}
           onClick={() => {
-            debugLog('buy.button.click');
+            debugLog('buy.button.click', { minterConfigured: isMinterConfigured, nftMode: isNftMode });
             void handleBuy();
           }}
         >
-          {buying ? 'Confirm in wallet…' : buyLabel}
+          {buying ? 'Confirm in wallet…' : isMinterConfigured ? buyLabel : 'Buy (minter not set)'}
         </Button>
       </div>
 
-      {!isMinterConfigured && (
+      {!isMinterConfigured && !isNftMode && (
         <Alert variant="warning">
           Set <code className="font-mono">PUBLIC_MINTER_ADDRESS</code> in Railway and redeploy.
+        </Alert>
+      )}
+
+      {!isMinterConfigured && isNftMode && (
+        <Alert variant="info">
+          NFT redeem mode — jetton minter not required. Use the <strong>Redeem</strong> tab after
+          connecting your wallet.
+        </Alert>
+      )}
+
+      {connectStep !== 'idle' && (
+        <Alert variant="info">
+          <p className="font-semibold">Connect flow</p>
+          <p className="font-mono text-xs">{connectStep}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            If you see &quot;Manifest content error&quot; after the bridge opens, the wallet rejected
+            localhost — use production HTTPS or Tonkeeper in-browser extension.
+          </p>
         </Alert>
       )}
 
@@ -252,6 +297,27 @@ export function TimeVoucherApp() {
 
   return (
     <div className="space-y-5">
+      {bootError ? (
+        <Alert variant="error">
+          <p className="font-semibold">Wallet UI boot failed</p>
+          <p className="text-sm">{bootError}</p>
+        </Alert>
+      ) : null}
+
+      {manifestWarning ? (
+        <Alert variant="warning">
+          <p className="font-semibold">TonConnect manifest warning</p>
+          <p className="text-sm">{manifestWarning}</p>
+        </Alert>
+      ) : null}
+
+      {!tonConnectUI ? (
+        <Alert variant="info">
+          <p className="font-semibold">Loading wallet UI…</p>
+          <p className="text-sm text-muted-foreground">TonConnect is initializing.</p>
+        </Alert>
+      ) : null}
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -291,12 +357,25 @@ export function TimeVoucherApp() {
                   title: 'Technical details',
                   content: (
                     <ul className="space-y-1 font-mono text-xs">
+                      <li>Origin: {typeof window !== 'undefined' ? window.location.origin : '—'}</li>
+                      <li>
+                        Manifest:{' '}
+                        {typeof window !== 'undefined'
+                          ? `${window.location.origin}/tonconnect-manifest.json`
+                          : '—'}
+                      </li>
                       <li>Minter: {isMinterConfigured ? config.minterAddress : 'not set'}</li>
                       <li>NFT item: {isNftMode ? config.nftItemAddress : 'not set'}</li>
                       <li>Network: {config.network}</li>
-                      <li>Debug: add ?debug=1 to URL</li>
+                      <li>Wallet: {connectedWalletAddress ?? 'not connected'}</li>
+                      <li>Debug: ?debug=1 or localStorage.timeVoucherDebug=1</li>
                     </ul>
                   ),
+                },
+                {
+                  id: 'tonconnect',
+                  title: 'TonConnect diagnostics',
+                  content: <TonConnectDiagnostics />,
                 },
               ]}
             />

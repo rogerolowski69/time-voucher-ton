@@ -65,12 +65,6 @@ import { buttonClassName } from '@/components/ui/button';
   <script>
     document.getElementById('hero-buy')?.addEventListener('click', () => {
       console.log('[TimeVoucher] hero.buy.click — scrolling to #buy wallet UI');
-      window.setTimeout(() => {
-        const connect = document.querySelector('#ton-connect-button');
-        if (!connect || connect.childElementCount === 0) {
-          console.warn('[TimeVoucher] TonConnect button not found yet. Wait or check console errors.');
-        }
-      }, 3000);
     });
     document.addEventListener('astro:hydrate', () => {
       document.getElementById('voucher-loading')?.remove();

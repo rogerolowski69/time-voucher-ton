@@ -17,6 +17,7 @@ from config import resolve_public_url
 from db import StoredEvent, get_database_path, init_db, list_events, log_event
 from nft_redeem import fetch_redeem_data
 from telegram import parse_telegram_user, validate_telegram_init_data
+from telegram_bot import handle_telegram_update
 from tx_verify import TxVerificationError, verify_purchase_boc, verify_redeem_boc
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -66,8 +67,14 @@ class TelegramVerifyBody(BaseModel):
 
 
 def public_origin(request: Request) -> str:
+    forwarded_host = request.headers.get("x-forwarded-host", "").strip()
+    if forwarded_host:
+        proto = request.headers.get("x-forwarded-proto", "https").strip() or "https"
+        return f"{proto}://{forwarded_host}".rstrip("/")
+
     if PUBLIC_URL:
         return PUBLIC_URL
+
     return str(request.base_url).rstrip("/")
 
 
@@ -222,6 +229,21 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.post("/api/webhooks/telegram")
+async def telegram_webhook(request: Request) -> dict[str, bool]:
+    """Telegram Bot API webhook — replies to /start with Mini App button."""
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+
+    try:
+        update = await request.json()
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from error
+
+    await handle_telegram_update(update)
+    return {"ok": True}
+
+
 @app.post("/api/telegram/verify")
 def telegram_verify(body: TelegramVerifyBody) -> dict[str, bool]:
     if not BOT_TOKEN:
@@ -321,9 +343,7 @@ def tonconnect_manifest(request: Request) -> dict[str, str]:
     return {
         "url": origin,
         "name": "Time Voucher",
-        "iconUrl": f"{origin}/icon.svg",
-        "termsOfUseUrl": origin,
-        "privacyPolicyUrl": origin,
+        "iconUrl": f"{origin}/icon-180.png",
     }
 
 

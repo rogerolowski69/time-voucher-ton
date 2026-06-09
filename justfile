@@ -169,3 +169,6 @@ web-build: web-install
 
 web-test:
     cd web && npm run test
+
+web-test-api:
+    cd web/api && .venv/bin/python -m pytest tests/ -q
