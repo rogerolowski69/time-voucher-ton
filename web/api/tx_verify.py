@@ -124,6 +124,13 @@ def _normalize_address(address: str) -> str:
     return Address(address).to_str(is_user_friendly=False)
 
 
+def _addresses_equal(left: str, right: str) -> bool:
+    try:
+        return Address(left) == Address(right)
+    except Exception as error:
+        raise TxVerificationError("Invalid address in transaction verification") from error
+
+
 def _toncenter_base(network: str | None) -> str:
     return TONCENTER_TESTNET if network == "testnet" else TONCENTER_MAINNET
 
@@ -184,8 +191,11 @@ def verify_purchase_boc(
     parsed = parse_external_message(boc)
     expected_minter = _normalize_address(minter_address)
 
-    if parsed.destination != expected_minter:
-        raise TxVerificationError("Transaction destination does not match minter address")
+    if not _addresses_equal(parsed.destination, expected_minter):
+        raise TxVerificationError(
+            f"Transaction destination does not match minter address "
+            f"(tx={parsed.destination}, expected={expected_minter})"
+        )
 
     body_slice = parsed.body.begin_parse()
     if body_slice.remaining_bits < 32:

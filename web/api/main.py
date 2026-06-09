@@ -90,7 +90,17 @@ def resolve_telegram_context(init_data: str | None, *, required: bool = False) -
         }
 
     if BOT_TOKEN:
-        validate_telegram_init_data(init_data, BOT_TOKEN, 3600)
+        try:
+            validate_telegram_init_data(init_data, BOT_TOKEN, 3600)
+        except ValueError:
+            if required:
+                raise
+            # Stale initData in Telegram Mini App must not block purchase logging.
+            return {
+                "telegramUserId": None,
+                "telegramUsername": None,
+                "telegramFirstName": None,
+            }
 
     user = parse_telegram_user(init_data)
     if not user:

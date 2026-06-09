@@ -229,7 +229,11 @@ export function useVoucherActions(
         store.getState().setPlainStatus('Purchase sent. TIME will appear in your wallet shortly.', 'ok');
       } catch (logError) {
         debugError('buy.logEvent.fail', logError);
-        store.getState().setPlainStatus('Purchase sent, but server logging failed.', 'ok');
+        const reason = logError instanceof Error ? logError.message : 'Unknown error';
+        store.getState().setPlainStatus(
+          `Purchase sent on-chain, but server logging failed: ${reason}`,
+          'error',
+        );
       }
 
       await refreshWalletBalance(wallet.account.address);

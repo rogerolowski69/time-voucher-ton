@@ -48,8 +48,15 @@ async function postEvent(path: string, body: object): Promise<LoggedEventRespons
     | null;
 
   if (!response.ok || !payload?.ok) {
-    const message = payload?.error ?? payload?.detail ?? `Event logging failed (${response.status})`;
-    debugError('api.postEvent.fail', new Error(message), { path, status: response.status });
+    const detail = payload?.detail;
+    const detailText = Array.isArray(detail)
+      ? detail.map((item) => (typeof item === 'object' && item && 'msg' in item ? String(item.msg) : String(item))).join('; ')
+      : typeof detail === 'string'
+        ? detail
+        : undefined;
+    const message =
+      payload?.error ?? detailText ?? `Event logging failed (HTTP ${response.status})`;
+    debugError('api.postEvent.fail', new Error(message), { path, status: response.status, payload });
     throw new Error(message);
   }
 
