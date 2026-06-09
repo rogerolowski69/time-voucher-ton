@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 PUBLIC_URL = resolve_public_url()
 DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
@@ -222,6 +223,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "telegramAuthConfigured": bool(BOT_TOKEN),
+        "telegramWebhookSecretConfigured": bool(TELEGRAM_WEBHOOK_SECRET),
         "adminApiConfigured": bool(ADMIN_API_TOKEN),
         "publicUrl": PUBLIC_URL or None,
         "eventDatabase": get_database_path(),
@@ -230,10 +232,20 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/webhooks/telegram")
-async def telegram_webhook(request: Request) -> dict[str, bool]:
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+) -> dict[str, bool]:
     """Telegram Bot API webhook — replies to /start with Mini App button."""
     if not BOT_TOKEN:
         raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+
+    if TELEGRAM_WEBHOOK_SECRET:
+        if not x_telegram_bot_api_secret_token or not secrets.compare_digest(
+            x_telegram_bot_api_secret_token,
+            TELEGRAM_WEBHOOK_SECRET,
+        ):
+            raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
 
     try:
         update = await request.json()
